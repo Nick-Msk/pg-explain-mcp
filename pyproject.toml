@@ -1,0 +1,23 @@
+[project]
+name = "pg-explain-mcp"
+version = "0.1.0"
+description = "MCP server for analyzing PostgreSQL query plans"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "mcp[cli]>=1.0.0,<2.0.0",
+    "psycopg[binary]>=3.1",
+    "pydantic>=2.0",
+]
+
+[project.scripts]
+pg-explain-mcp = "pg_explain_mcp.server:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
