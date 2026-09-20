@@ -163,7 +163,9 @@ become slower...
 ## Demo
 
 ![pg-explain in action](images/screenshot.png)
+
 See [`usage_examples/`](usage_examples/) for real-world runs.
+- [Sample 1: Ordered-set aggregates over a 5M-row table](usage_examples/sample_query1.md)
 
 ## Development
 
