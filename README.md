@@ -163,6 +163,7 @@ become slower...
 ## Demo
 
 ![pg-explain in action](images/screenshot.png)
+See [`usage_examples/`](usage_examples/) for real-world runs.
 
 ## Development
 
