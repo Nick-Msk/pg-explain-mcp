@@ -174,6 +174,7 @@ class NestedLoopCheck:
             )
         ]
 
+
 class BitmapHeapScanCheck:
     """Bitmap Heap Scan on a large table — check bitmap efficiency.
 
@@ -208,6 +209,99 @@ class BitmapHeapScanCheck:
         ]
 
 
+class IndexScanCheck:
+    """Index Scan / Index Only Scan with poor heap locality.
+
+    Two scenarios are detected:
+
+    1. **Index Only Scan** with a high number of ``Heap Fetches``. This
+       means the visibility map is stale — the engine still has to visit
+       the heap for most rows, defeating the purpose of an index-only scan.
+       Fix: run ``VACUUM``, or consider ``CLUSTER`` to improve locality.
+
+    2. **Index Scan** reading many blocks from disk relative to the number
+       of rows returned. This indicates poor clustering: the heap rows are
+       scattered, causing random I/O. Fix: ``CLUSTER`` on the index used.
+    """
+
+    name = "index_scan_heap_locality"
+
+    # Minimum absolute threshold to avoid noise on small scans.
+    MIN_ROWS = 1000
+
+    # Index Only Scan: ratio of heap fetches to actual rows above which we warn.
+    HEAP_FETCH_RATIO = 0.10  # 10%
+
+    # Index Scan: minimum disk blocks read to trigger a warning.
+    MIN_DISK_BLOCKS = 100
+
+    def check(self, node: dict[str, Any]) -> list[Issue]:
+        node_type = node.get("Node Type", "")
+
+        if node_type == "Index Only Scan":
+            return self._check_index_only(node)
+        if node_type == "Index Scan":
+            return self._check_regular_index(node)
+        return []
+
+    # ------------------------------------------------------------------
+    # Internals
+    # ------------------------------------------------------------------
+
+    def _check_index_only(self, node: dict[str, Any]) -> list[Issue]:
+        heap_fetches = node.get("Heap Fetches", 0)
+        actual_rows = node.get("Actual Rows", 0)
+
+        if heap_fetches < self.MIN_ROWS:
+            return []
+        if actual_rows > 0 and heap_fetches / actual_rows < self.HEAP_FETCH_RATIO:
+            return []
+
+        index_name = node.get("Index Name", "?")
+        relation = node.get("Relation Name", "?")
+        ratio_pct = (heap_fetches / actual_rows * 100) if actual_rows else 0
+
+        return [
+            Issue(
+                severity=SEVERITY_WARNING,
+                type=self.name,
+                message=(
+                    f"Index Only Scan on '{index_name}' ({relation}) "
+                    f"performed {heap_fetches} heap fetches for {actual_rows} rows "
+                    f"({ratio_pct:.1f}%). The visibility map is stale. "
+                    "Run VACUUM, or consider CLUSTER to improve locality."
+                ),
+                node="Index Only Scan",
+            )
+        ]
+
+    def _check_regular_index(self, node: dict[str, Any]) -> list[Issue]:
+        actual_rows = node.get("Actual Rows", 0)
+        read_blocks = node.get("Shared Read Blocks", 0)
+
+        if actual_rows < self.MIN_ROWS:
+            return []
+        if read_blocks < self.MIN_DISK_BLOCKS:
+            return []
+
+        index_name = node.get("Index Name", "?")
+        relation = node.get("Relation Name", "?")
+
+        return [
+            Issue(
+                severity=SEVERITY_INFO,
+                type=self.name,
+                message=(
+                    f"Index Scan on '{index_name}' ({relation}) read "
+                    f"{read_blocks} blocks from disk for {actual_rows} rows. "
+                    "Poor heap clustering may be causing random I/O. "
+                    "Consider CLUSTER on this index."
+                ),
+                node="Index Scan",
+            )
+        ]
+
+
 # ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
@@ -218,7 +312,8 @@ DEFAULT_CHECKS: tuple[PlanCheck, ...] = (
     DiskSpillSortCheck(),
     DiskSpillHashCheck(),
     NestedLoopCheck(),
-    BitmapHeapScanCheck()
+    BitmapHeapScanCheck(),
+    IndexScanCheck(),
 )
 
 
