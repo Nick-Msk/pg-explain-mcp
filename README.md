@@ -1,6 +1,6 @@
 # pg-explain-mcp
 
-![Release](https://img.shields.io/github/v/release/Nick-Msk/pg-explain-mcp)
+![Tag](https://img.shields.io/github/v/tag/Nick-Msk/pg-explain-mcp)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![MCP](https://img.shields.io/badge/MCP-compatible-purple)
