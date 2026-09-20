@@ -5,14 +5,40 @@ description = "MCP server for analyzing PostgreSQL query plans"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
+authors = [
+    { name = "Nick-Msk" },
+]
+keywords = ["mcp", "postgresql", "explain", "query-plan", "llm", "ai-agent"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Database",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
 dependencies = [
     "mcp[cli]>=1.0.0,<2.0.0",
     "psycopg[binary]>=3.1",
     "pydantic>=2.0",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+]
+
 [project.scripts]
 pg-explain-mcp = "pg_explain_mcp.server:main"
+
+[project.urls]
+Homepage = "https://github.com/Nick-Msk/pg-explain-mcp"
+Repository = "https://github.com/Nick-Msk/pg-explain-mcp"
+Issues = "https://github.com/Nick-Msk/pg-explain-mcp/issues"
 
 [build-system]
 requires = ["setuptools>=68"]
@@ -20,4 +46,15 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
 
