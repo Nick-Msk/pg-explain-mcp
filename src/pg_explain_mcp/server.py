@@ -23,12 +23,8 @@ def list_tables() -> str:
     tables: dict[str, list[str]] = {}
     for row in rows:
         key = f"{row['table_schema']}.{row['table_name']}"
-        tables.setdefault(key, []).append(
-            f"{row['column_name']} {row['data_type']}"
-        )
-    result = "\n".join(
-        f"{name}: {', '.join(cols)}" for name, cols in tables.items()
-    )
+        tables.setdefault(key, []).append(f"{row['column_name']} {row['data_type']}")
+    result = "\n".join(f"{name}: {', '.join(cols)}" for name, cols in tables.items())
     return result or "No tables found."
 
 
@@ -49,6 +45,7 @@ def explain(sql: str) -> str:
     except Exception as e:
         return f"Execution error: {e}"
 
+
 def main() -> None:
     """Entry point for the `pg-explain-mcp` console script."""
     mcp.run()
@@ -56,4 +53,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

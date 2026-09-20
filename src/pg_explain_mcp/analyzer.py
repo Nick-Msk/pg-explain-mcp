@@ -40,8 +40,7 @@ class PlanCheck(Protocol):
 
     name: str
 
-    def check(self, node: dict[str, Any]) -> list[Issue]:
-        ...
+    def check(self, node: dict[str, Any]) -> list[Issue]: ...
 
 
 # ---------------------------------------------------------------------------
@@ -143,10 +142,7 @@ class DiskSpillHashCheck:
             Issue(
                 severity=SEVERITY_WARNING,
                 type=self.name,
-                message=(
-                    f"Hash Join used multiple batches ({batches}). "
-                    "Increase work_mem."
-                ),
+                message=(f"Hash Join used multiple batches ({batches}). Increase work_mem."),
                 node=node_type,
             )
         ]

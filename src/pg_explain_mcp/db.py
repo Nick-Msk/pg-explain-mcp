@@ -78,4 +78,3 @@ def explain_query(sql: str, analyze: bool = True, buffers: bool = True) -> dict[
             cur.execute(explain_sql)
             result = cur.fetchone()
             return result
-
