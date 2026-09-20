@@ -1,30 +1,41 @@
 # Sample: Index Scan After Heavy Churn
 
 > Scenario 2 of 2 for `IndexScanCheck`.
-> Prerequisites: run `pg_samples.sql` through **step 5** (after churn).
+
+## Prerequisites
+
+```sql
+CREATE EXTENSION mcp_explain_tool;
+CALL mcp_explain_tool.fill_index_scan(5000000);
+```
+
+Note: `VACUUM` is intentionally **not** run on
+`data_index_scan_unclastered`. Autovacuum is disabled for this table
+(set inside the extension), so the visibility map stays stale.
 
 ## Context
 
-The `big_unclastered` table was subjected to 20 iterations of
-`UPDATE` / `DELETE` / `INSERT` churn **without `VACUUM`**. Autovacuum is
-disabled on the table, so the visibility map is now stale.
+`data_index_scan_unclastered` was loaded with 5M rows, then subjected to
+20 iterations of `UPDATE` / `DELETE` / `INSERT` churn. The visibility map
+is now stale, and an Index Only Scan can no longer trust the index — every
+row requires a heap visit to confirm visibility.
 
-After the churn, `pg_stat_user_tables` reports:
+Verify the damage:
 
-| Metric       | Value     |
-|--------------|-----------|
-| `n_live_tup` | 4,792,873 |
-| `n_dead_tup` | 24,875,303 |
-| `dead_pct`   | **519%**  |
+```sql
+SELECT n_live_tup, n_dead_tup,
+       ROUND(n_dead_tup::numeric / NULLIF(n_live_tup, 0) * 100, 2) AS dead_pct
+FROM pg_stat_user_tables
+WHERE relname = 'data_index_scan_unclastered';
+```
 
-An Index Only Scan can no longer trust the index — every row requires
-a heap visit to confirm visibility.
+Expected: `dead_pct > 20%` (in our run it reached 519%).
 
 ## Input Query
 
 ```sql
 SELECT val
-FROM big_unclastered
+FROM mcp_explain_tool.data_index_scan_unclastered
 WHERE val BETWEEN '000' AND '001'
 LIMIT 10000;
 ```
@@ -45,7 +56,7 @@ LIMIT 10000;
     {
       "severity": "warning",
       "type": "index_scan_heap_locality",
-      "message": "Index Only Scan on 'idx_big_unclastered_val' (big_unclastered) performed 2975 heap fetches for 1172.0 rows (253.8%). The visibility map is stale. Run VACUUM, or consider CLUSTER to improve locality.",
+      "message": "Index Only Scan on 'idx_data_index_scan_unclastered_val' (data_index_scan_unclastered) performed 2975 heap fetches for 1172.0 rows (253.8%). The visibility map is stale. Run VACUUM, or consider CLUSTER to improve locality.",
       "node": "Index Only Scan"
     }
   ],
@@ -62,8 +73,8 @@ LIMIT 10000;
     {
       "depth": 1,
       "node_type": "Index Only Scan",
-      "relation": "big_unclastered",
-      "index": "idx_big_unclastered_val",
+      "relation": "data_index_scan_unclastered",
+      "index": "idx_data_index_scan_unclastered_val",
       "actual_rows": 1172.0,
       "plan_rows": 1484,
       "heap_fetches": 2975,
@@ -85,10 +96,10 @@ LIMIT 10000;
 
 ### Primary Issue: Stale Visibility Map
 
-The plan uses an **Index Only Scan** on `idx_big_unclastered_val`, which
-is normally the fastest access path for this query. But the plan reports
-**2,975 heap fetches for 1,172 rows** — the index alone is no longer
-sufficient.
+The plan uses an **Index Only Scan** on
+`idx_data_index_scan_unclastered_val`, which is normally the fastest
+access path for this query. But the plan reports **2,975 heap fetches
+for 1,172 rows** — the index alone is no longer sufficient.
 
 An Index Only Scan can skip the heap *only* if the **visibility map**
 marks the corresponding pages as all-visible. After heavy `UPDATE` /
@@ -99,7 +110,7 @@ index traversal into a series of random heap reads.
 ### Recommendation
 
 ```sql
-VACUUM (ANALYZE) big_unclastered;
+VACUUM (ANALYZE) mcp_explain_tool.data_index_scan_unclastered;
 ```
 
 - `VACUUM` rebuilds the visibility map — future Index Only Scans can
@@ -110,7 +121,8 @@ VACUUM (ANALYZE) big_unclastered;
 For permanently clustered data:
 
 ```sql
-CLUSTER big_unclastered USING idx_big_unclastered_val;
+CLUSTER mcp_explain_tool.data_index_scan_unclastered
+  USING idx_data_index_scan_unclastered_val;
 ```
 
 This physically reorders the heap to match the index, at the cost of an
@@ -139,5 +151,5 @@ output does not surface by itself:
    reason about the actual cause.
 3. **Recommend** — target the root cause (`VACUUM`), not a symptom
    (adding another index).
-4. **Verify** — re-run after the fix and confirm the warning is gone.
-
+4. **Verify** — re-run after the fix and confirm the warning is gone
+.

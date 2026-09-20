@@ -1,11 +1,18 @@
 # Sample: Index Scan on a Healthy Table
 
 > Scenario 1 of 2 for `IndexScanCheck`.
-> Prerequisites: run `pg_samples.sql` up to **step 3** (baseline query).
+
+## Prerequisites
+
+```sql
+CREATE EXTENSION mcp_explain_tool;
+CALL mcp_explain_tool.fill_index_scan(5000000);
+VACUUM ANALYZE mcp_explain_tool.data_index_scan_norm;
+```
 
 ## Context
 
-The `big_unclastered` table is freshly loaded with 5M rows and immediately
+`data_index_scan_norm` is loaded with 5M rows and immediately
 `VACUUM ANALYZE`-ed. The visibility map is fresh, so an Index Only Scan
 can serve the query without visiting the heap.
 
@@ -16,7 +23,7 @@ trigger any warnings here. If it did, it would be a false positive.
 
 ```sql
 SELECT val
-FROM big_unclastered
+FROM mcp_explain_tool.data_index_scan_norm
 WHERE val BETWEEN '000' AND '001'
 LIMIT 10000;
 ```
@@ -47,8 +54,8 @@ LIMIT 10000;
     {
       "depth": 1,
       "node_type": "Index Only Scan",
-      "relation": "big_unclastered",
-      "index": "idx_big_unclastered_val",
+      "relation": "data_index_scan_norm",
+      "index": "idx_data_index_scan_norm_val",
       "actual_rows": 83.0,
       "plan_rows": 4,
       "heap_fetches": 0,
@@ -81,6 +88,6 @@ No warnings are emitted — `IndexScanCheck` correctly stays silent.
 
 ## Next Step
 
-Continue with `pg_samples.sql` step 4 (churn), then run the same query
-again — see [`sample_index_on_unclastered.md`](sample_index_on_unclastered.md).
+Run the same query against `data_index_scan_unclastered` — see
+[`sample_index_on_unclastered.md`](sample_index_on_unclastered.md).
 
