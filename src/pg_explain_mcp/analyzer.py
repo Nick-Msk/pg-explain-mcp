@@ -1,90 +1,228 @@
-"""PostgreSQL execution plan analyzer: detect bottlenecks and issues."""
+"""PostgreSQL execution plan analyzer: detect bottlenecks and issues.
 
-from typing import Any
+The analyzer walks the JSON plan tree and applies a list of independent
+checks (adapters) to every node. To add a new check, implement the
+``PlanCheck`` protocol and register the instance in ``DEFAULT_CHECKS``.
+"""
+
+from dataclasses import asdict, dataclass
+from typing import Any, Protocol
 
 
 SEVERITY_WARNING = "warning"
 SEVERITY_INFO = "info"
 
 
-def _walk_plan(node: dict[str, Any], issues: list[dict[str, Any]]) -> None:
-    """Recursively traverse the plan tree and collect issues."""
-    node_type = node.get("Node Type", "")
+# ---------------------------------------------------------------------------
+# Domain model
+# ---------------------------------------------------------------------------
 
-    # 1. Sequential scan on a large table — likely missing an index
-    if node_type == "Seq Scan":
+
+@dataclass(frozen=True)
+class Issue:
+    """A single detected problem in the execution plan."""
+
+    severity: str
+    type: str
+    message: str
+    node: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+class PlanCheck(Protocol):
+    """Adapter interface: each check inspects a single plan node.
+
+    Implementations must be stateless (or at least thread-safe) and
+    must never mutate the ``node`` they receive.
+    """
+
+    name: str
+
+    def check(self, node: dict[str, Any]) -> list[Issue]:
+        ...
+
+
+# ---------------------------------------------------------------------------
+# Checks (adapters)
+# ---------------------------------------------------------------------------
+
+
+class SeqScanCheck:
+    """Sequential scan on a large table — likely missing an index."""
+
+    name = "seq_scan"
+    THRESHOLD_ROWS = 1000
+
+    def check(self, node: dict[str, Any]) -> list[Issue]:
+        if node.get("Node Type") != "Seq Scan":
+            return []
         rows = node.get("Actual Rows", 0)
-        if rows > 1000:
-            issues.append({
-                "severity": SEVERITY_WARNING,
-                "type": "seq_scan",
-                "message": (
+        if rows <= self.THRESHOLD_ROWS:
+            return []
+        return [
+            Issue(
+                severity=SEVERITY_WARNING,
+                type=self.name,
+                message=(
                     f"Sequential scan on '{node.get('Relation Name', '?')}' "
                     f"processed {rows} rows. Consider adding an index."
                 ),
-                "node": node_type,
-            })
+                node="Seq Scan",
+            )
+        ]
 
-    # 2. Large mismatch between planner estimate and actual rows
-    planned = node.get("Plan Rows", 0)
-    actual = node.get("Actual Rows", 0)
-    if planned > 0 and actual > 0:
+
+class EstimateMismatchCheck:
+    """Large mismatch between planner estimate and actual row counts."""
+
+    name = "estimate_mismatch"
+    THRESHOLD_RATIO = 10.0
+
+    def check(self, node: dict[str, Any]) -> list[Issue]:
+        planned = node.get("Plan Rows", 0)
+        actual = node.get("Actual Rows", 0)
+        if planned <= 0 or actual <= 0:
+            return []
+
         ratio = max(planned, actual) / min(planned, actual)
-        if ratio > 10:
-            issues.append({
-                "severity": SEVERITY_WARNING,
-                "type": "estimate_mismatch",
-                "message": (
+        if ratio <= self.THRESHOLD_RATIO:
+            return []
+
+        node_type = node.get("Node Type", "")
+        return [
+            Issue(
+                severity=SEVERITY_WARNING,
+                type=self.name,
+                message=(
                     f"Planner misestimated cardinality on '{node_type}': "
                     f"expected {planned}, got {actual} (ratio x{ratio:.1f}). "
                     "Consider running ANALYZE."
                 ),
-                "node": node_type,
-            })
+                node=node_type,
+            )
+        ]
 
-    # 3. Disk spills — work_mem is too small
-    if node.get("Sort Method", "").startswith("external"):
-        issues.append({
-            "severity": SEVERITY_WARNING,
-            "type": "disk_spill_sort",
-            "message": (
-                f"Sort operation on '{node_type}' spilled to disk. "
-                "Increase work_mem or optimize the query."
-            ),
-            "node": node_type,
-        })
 
-    if node.get("Hash Batches", 1) > 1:
-        issues.append({
-            "severity": SEVERITY_WARNING,
-            "type": "disk_spill_hash",
-            "message": (
-                f"Hash Join used multiple batches "
-                f"({node.get('Hash Batches')}). Increase work_mem."
-            ),
-            "node": node_type,
-        })
+class DiskSpillSortCheck:
+    """Sort operation spilled to disk — work_mem is too small."""
 
-    # 4. Nested Loop with too many iterations
-    if node_type == "Nested Loop":
+    name = "disk_spill_sort"
+
+    def check(self, node: dict[str, Any]) -> list[Issue]:
+        if not node.get("Sort Method", "").startswith("external"):
+            return []
+
+        node_type = node.get("Node Type", "")
+        return [
+            Issue(
+                severity=SEVERITY_WARNING,
+                type=self.name,
+                message=(
+                    f"Sort operation on '{node_type}' spilled to disk. "
+                    "Increase work_mem or optimize the query."
+                ),
+                node=node_type,
+            )
+        ]
+
+
+class DiskSpillHashCheck:
+    """Hash Join used multiple batches — work_mem is too small."""
+
+    name = "disk_spill_hash"
+
+    def check(self, node: dict[str, Any]) -> list[Issue]:
+        batches = node.get("Hash Batches", 1)
+        if batches <= 1:
+            return []
+
+        node_type = node.get("Node Type", "")
+        return [
+            Issue(
+                severity=SEVERITY_WARNING,
+                type=self.name,
+                message=(
+                    f"Hash Join used multiple batches ({batches}). "
+                    "Increase work_mem."
+                ),
+                node=node_type,
+            )
+        ]
+
+
+class NestedLoopCheck:
+    """Nested Loop with too many iterations — consider a Hash Join."""
+
+    name = "nested_loop"
+    THRESHOLD_LOOPS = 1000
+
+    def check(self, node: dict[str, Any]) -> list[Issue]:
+        if node.get("Node Type") != "Nested Loop":
+            return []
+
         loops = node.get("Actual Loops", 1)
-        if loops > 1000:
-            issues.append({
-                "severity": SEVERITY_INFO,
-                "type": "nested_loop",
-                "message": (
+        if loops <= self.THRESHOLD_LOOPS:
+            return []
+
+        return [
+            Issue(
+                severity=SEVERITY_INFO,
+                type=self.name,
+                message=(
                     f"Nested Loop executed {loops} times. "
                     "Check whether a Hash Join would be more efficient."
                 ),
-                "node": node_type,
-            })
+                node="Nested Loop",
+            )
+        ]
+
+
+# ---------------------------------------------------------------------------
+# Registry
+# ---------------------------------------------------------------------------
+
+DEFAULT_CHECKS: tuple[PlanCheck, ...] = (
+    SeqScanCheck(),
+    EstimateMismatchCheck(),
+    DiskSpillSortCheck(),
+    DiskSpillHashCheck(),
+    NestedLoopCheck(),
+)
+
+
+# ---------------------------------------------------------------------------
+# Traversal and reporting
+# ---------------------------------------------------------------------------
+
+
+def _walk_plan(
+    node: dict[str, Any],
+    issues: list[Issue],
+    checks: tuple[PlanCheck, ...],
+) -> None:
+    """Recursively traverse the plan tree, applying every check to each node."""
+    for check in checks:
+        issues.extend(check.check(node))
 
     for child in node.get("Plans", []):
-        _walk_plan(child, issues)
+        _walk_plan(child, issues, checks)
 
 
-def analyze_plan(plan_json: list[dict[str, Any]]) -> dict[str, Any]:
-    """Analyze a JSON execution plan and return a structured report."""
+def analyze_plan(
+    plan_json: list[dict[str, Any]],
+    checks: tuple[PlanCheck, ...] = DEFAULT_CHECKS,
+) -> dict[str, Any]:
+    """Analyze a JSON execution plan and return a structured report.
+
+    Args:
+        plan_json: The JSON plan returned by ``EXPLAIN (FORMAT JSON)``.
+        checks:    A tuple of adapters to apply. Defaults to ``DEFAULT_CHECKS``.
+
+    Returns:
+        A dict with timing, a list of issues, and a short summary.
+    """
     if not plan_json:
         return {"issues": [], "summary": "Empty plan"}
 
@@ -93,27 +231,26 @@ def analyze_plan(plan_json: list[dict[str, Any]]) -> dict[str, Any]:
     execution_time = root.get("Execution Time", 0)
     planning_time = root.get("Planning Time", 0)
 
-    issues: list[dict[str, Any]] = []
-    _walk_plan(plan_tree, issues)
+    issues: list[Issue] = []
+    _walk_plan(plan_tree, issues, checks)
 
     return {
         "execution_time_ms": execution_time,
         "planning_time_ms": planning_time,
         "total_time_ms": execution_time + planning_time,
-        "issues": issues,
+        "issues": [issue.to_dict() for issue in issues],
         "issue_count": len(issues),
         "summary": _make_summary(issues, execution_time),
     }
 
 
-def _make_summary(issues: list[dict[str, Any]], exec_time: float) -> str:
+def _make_summary(issues: list[Issue], exec_time: float) -> str:
     """Build a short human-readable summary for the LLM."""
     if not issues:
         return f"No issues found. Execution time: {exec_time:.2f} ms."
 
-    warnings = [i for i in issues if i["severity"] == SEVERITY_WARNING]
+    warnings = [i for i in issues if i.severity == SEVERITY_WARNING]
     return (
         f"Found {len(issues)} issues ({len(warnings)} critical). "
         f"Execution time: {exec_time:.2f} ms."
     )
-
