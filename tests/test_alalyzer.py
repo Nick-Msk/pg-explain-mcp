@@ -2,6 +2,7 @@
 
 from pg_explain_mcp.analyzer import (
     DEFAULT_CHECKS,
+    BitmapHeapScanCheck,
     DiskSpillHashCheck,
     DiskSpillSortCheck,
     EstimateMismatchCheck,
@@ -82,6 +83,45 @@ class TestNestedLoopCheck:
         assert len(issues) == 1
         assert issues[0].severity == "info"
 
+class TestBitmapHeapScanCheck:
+    def test_small_bitmap_is_ok(self):
+        node = {
+            "Node Type": "Bitmap Heap Scan",
+            "Actual Rows": 1000,
+            "Relation Name": "t",
+        }
+        assert BitmapHeapScanCheck().check(node) == []
+
+    def test_large_bitmap_is_reported(self):
+        node = {
+            "Node Type": "Bitmap Heap Scan",
+            "Actual Rows": 500_000,
+            "Relation Name": "events",
+        }
+        issues = BitmapHeapScanCheck().check(node)
+        assert len(issues) == 1
+        assert issues[0].type == "bitmap_heap_scan"
+        assert issues[0].severity == "info"
+        assert "events" in issues[0].message
+
+    def test_boundary_value_is_ok(self):
+        node = {
+            "Node Type": "Bitmap Heap Scan",
+            "Actual Rows": 100_000,
+            "Relation Name": "t",
+        }
+        assert BitmapHeapScanCheck().check(node) == []
+
+    def test_other_node_type_is_ignored(self):
+        node = {"Node Type": "Index Scan", "Actual Rows": 999_999}
+        assert BitmapHeapScanCheck().check(node) == []
+
+    def test_missing_relation_name_does_not_crash(self):
+        node = {"Node Type": "Bitmap Heap Scan", "Actual Rows": 200_000}
+        issues = BitmapHeapScanCheck().check(node)
+        assert len(issues) == 1
+        assert "?" in issues[0].message
+
 
 # ---------------------------------------------------------------------------
 # analyze_plan — end-to-end
@@ -144,4 +184,20 @@ class TestAnalyzePlan:
         result = analyze_plan(plan, checks=())
         assert result["issue_count"] == 0
         assert len(DEFAULT_CHECKS) > 0
+
+    def test_plan_with_bitmap_heap_scan(self):
+        plan = [{
+            "Plan": {
+                "Node Type": "Bitmap Heap Scan",
+                "Relation Name": "events",
+                "Actual Rows": 500_000,
+                "Plans": [],
+            },
+            "Execution Time": 120.0,
+            "Planning Time": 2.0,
+        }]
+        result = analyze_plan(plan)
+        assert result["issue_count"] == 1
+        assert result["issues"][0]["type"] == "bitmap_heap_scan"
+
 

@@ -174,6 +174,39 @@ class NestedLoopCheck:
             )
         ]
 
+class BitmapHeapScanCheck:
+    """Bitmap Heap Scan on a large table — check bitmap efficiency.
+
+    A Bitmap Heap Scan is often chosen when an index would return too many
+    rows for a plain Index Scan. On large tables this can indicate a missing
+    composite index, poor selectivity, or a bloated bitmap.
+    """
+
+    name = "bitmap_heap_scan"
+    THRESHOLD_ROWS = 100_000
+
+    def check(self, node: dict[str, Any]) -> list[Issue]:
+        if node.get("Node Type") != "Bitmap Heap Scan":
+            return []
+
+        rows = node.get("Actual Rows", 0)
+        if rows <= self.THRESHOLD_ROWS:
+            return []
+
+        relation = node.get("Relation Name", "?")
+        return [
+            Issue(
+                severity=SEVERITY_INFO,
+                type=self.name,
+                message=(
+                    f"Bitmap Heap Scan on '{relation}' processed {rows} rows. "
+                    "Consider a composite index or partitioning to reduce "
+                    "the number of heap fetches."
+                ),
+                node="Bitmap Heap Scan",
+            )
+        ]
+
 
 # ---------------------------------------------------------------------------
 # Registry
@@ -185,6 +218,7 @@ DEFAULT_CHECKS: tuple[PlanCheck, ...] = (
     DiskSpillSortCheck(),
     DiskSpillHashCheck(),
     NestedLoopCheck(),
+    BitmapHeapScanCheck()
 )
 
 
