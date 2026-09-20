@@ -1,0 +1,6 @@
+comment = 'Test fixtures for pg-explain-mcp PlanCheck adapters'
+default_version = '0.1.0'
+relocatable = false
+superuser = false
+schema = mcp_explain_tool
+
