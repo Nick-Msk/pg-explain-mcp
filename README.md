@@ -162,10 +162,14 @@ become slower...
 ```
 ## Demo
 
-![pg-explain in action](images/screenshot.png)
+See [`usage_examples/`](usage_examples/) for full write-ups.
 
-See [`usage_examples/`](usage_examples/) for real-world runs.
-- [Sample 1: Ordered-set aggregates over a 5M-row table](usage_examples/sample_query1.md)
+- [Ordered-set aggregates over a 5M-row table](usage_examples/sample_query1.md)
+- [IndexScanCheck: healthy table](usage_examples/pg_index_scan_adapters/sample_index_on_normal.md)
+- [IndexScanCheck: stale visibility map after churn](usage_examples/pg_index_scan_adapters/sample_index_on_unclastered.md)
+
+The IndexScanCheck examples include a reproducible SQL scenario:
+[`usage_examples/pg_index_scan_adapters/pg_samples.sql`](usage_examples/pg_index_scan_adapters/pg_samples.sql).
 
 ## Development
 
