@@ -50,6 +50,17 @@ class TestEstimateMismatchCheck:
     def test_missing_values_do_not_crash(self):
         assert EstimateMismatchCheck().check({"Node Type": "X"}) == []
 
+    def test_small_absolute_numbers_are_ignored(self):
+        """High ratio on tiny numbers is noise, not a problem."""
+        node = {"Node Type": "Bitmap Index Scan", "Plan Rows": 4, "Actual Rows": 83}
+        assert EstimateMismatchCheck().check(node) == []
+
+    def test_large_absolute_mismatch_is_reported(self):
+        """A real mismatch on a large scan is reported."""
+        node = {"Node Type": "Hash Join", "Plan Rows": 5_000, "Actual Rows": 200_000}
+        issues = EstimateMismatchCheck().check(node)
+        assert len(issues) == 1
+        assert issues[0].type == "estimate_mismatch"
 
 class TestDiskSpillSortCheck:
     def test_in_memory_sort_is_ok(self):

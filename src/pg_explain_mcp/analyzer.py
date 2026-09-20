@@ -74,15 +74,29 @@ class SeqScanCheck:
 
 
 class EstimateMismatchCheck:
-    """Large mismatch between planner estimate and actual row counts."""
+    """Large mismatch between planner estimate and actual row counts.
+
+    The check has two thresholds:
+    - a relative one (``THRESHOLD_RATIO``) — the misestimate ratio, and
+    - an absolute one (``MIN_ROWS``) — the minimum number of actual rows
+      for the ratio to be meaningful.
+
+    Small absolute numbers (e.g. 4 vs 83) produce high ratios but are
+    irrelevant for planning and usually indicate stale statistics on
+    tiny subsets, not a real problem.
+    """
 
     name = "estimate_mismatch"
     THRESHOLD_RATIO = 10.0
+    MIN_ROWS = 1000
 
     def check(self, node: dict[str, Any]) -> list[Issue]:
         planned = node.get("Plan Rows", 0)
         actual = node.get("Actual Rows", 0)
+
         if planned <= 0 or actual <= 0:
+            return []
+        if max(planned, actual) < self.MIN_ROWS:
             return []
 
         ratio = max(planned, actual) / min(planned, actual)
@@ -102,7 +116,6 @@ class EstimateMismatchCheck:
                 node=node_type,
             )
         ]
-
 
 class DiskSpillSortCheck:
     """Sort operation spilled to disk — work_mem is too small."""
