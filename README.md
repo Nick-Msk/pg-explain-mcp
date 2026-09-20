@@ -190,6 +190,10 @@ Note: running the server manually in a terminal is **not** a valid test
 — MCP servers speak JSON-RPC over stdio and expect a client. Use
 `mcp dev` or an MCP-compatible assistant for interactive testing.
 
+## Changelog
+
+See [`CHANGELOG.md`](CHANGELOG.md) for a list of changes.
+
 ## Project structure
 
 ```
