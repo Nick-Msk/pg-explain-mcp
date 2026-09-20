@@ -23,7 +23,7 @@ about it, instead of just describing the SQL.
   - Large mismatches between planner estimates and actual row counts
   - Disk spills in sorts and hash joins (`work_mem` issues)
   - Excessive `Nested Loop` iterations
-
+- **`list_indexes`** — returns existing indexes for a table (or all tables).
 All database access is **read-only** — the connection runs inside
 `SET TRANSACTION READ ONLY`, so even a buggy query cannot modify data.
 
@@ -42,7 +42,7 @@ LLM (Continue.dev) ──MCP──> pg-explain-mcp ──psycopg3──> Postgre
 - **`analyzer.py`** — recursive traversal of the JSON plan tree. Detects
   bottlenecks and produces a structured report with `issues` and
   `summary`.
-- **`server.py`** — MCP entry point. Exposes three tools via `FastMCP`.
+- **`server.py`** — MCP entry point. Exposes 4 tools via `FastMCP`.
 
 ## Requirements
 

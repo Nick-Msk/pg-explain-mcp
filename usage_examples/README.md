@@ -7,6 +7,10 @@ Real-world runs of `pg-explain-mcp` against PostgreSQL.
 | Example | What it demonstrates |
 |---|---|
 | [Sample 1 — PERCENTILE_CONT](sample_query1.md) | Ordered-set aggregates over a 5M-row table (`SeqScanCheck`) |
+| Example | What it demonstrates |
+|---|---|
+| [Sample 1 — PERCENTILE_CONT](sample_query1.md) | Ordered-set aggregates over a 5M-row table (`SeqScanCheck`) |
+| [`list_indexes` usage](list_indexes.md) | Check existing indexes before recommending a new one |
 
 ## IndexScanCheck: before / after
 

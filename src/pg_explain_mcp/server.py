@@ -5,10 +5,29 @@ import json
 from mcp.server.fastmcp import FastMCP
 
 from pg_explain_mcp.analyzer import analyze_plan, summarize_plan_node
-from pg_explain_mcp.db import explain_query, get_schema
+from pg_explain_mcp.db import explain_query, get_indexes, get_schema
 
 mcp = FastMCP("pg-explain")
 
+def _format_indexes(rows: list[dict[str, any]]) -> str:
+    """Format index rows into a human-readable string."""
+    if not rows:
+        return "No indexes found."
+
+    lines = []
+    for row in rows:
+        cols = ", ".join(row["columns"])
+        if row["is_primary"]:
+            kind = "PRIMARY KEY"
+        elif row["is_unique"]:
+            kind = "UNIQUE"
+        else:
+            kind = "INDEX"
+        lines.append(
+            f"{row['schema_name']}.{row['table_name']} → "
+            f"{row['index_name']} [{kind}] ({cols})"
+        )
+    return "\n".join(lines)
 
 @mcp.tool()
 def ping() -> str:
@@ -27,6 +46,16 @@ def list_tables() -> str:
     result = "\n".join(f"{name}: {', '.join(cols)}" for name, cols in tables.items())
     return result or "No tables found."
 
+@mcp.tool()
+def list_indexes(table_name: str | None = None) -> str:
+    """Return a list of indexes for user tables.
+
+    Args:
+        table_name: Optional table name to filter by. If omitted,
+                    returns indexes for all user tables.
+    """
+    rows = get_indexes(table_name)
+    return _format_indexes(rows)
 
 @mcp.tool()
 def explain(sql: str) -> str:

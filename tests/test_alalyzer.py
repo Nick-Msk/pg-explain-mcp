@@ -353,3 +353,64 @@ class TestAnalyzePlan:
         result = analyze_plan(plan)
         assert result["issue_count"] == 1
         assert result["issues"][0]["type"] == "index_scan_heap_locality"
+
+# ---------------------------------------------------------------------------
+# list_indexes formatting
+# ---------------------------------------------------------------------------
+
+from pg_explain_mcp.server import _format_indexes
+
+class TestFormatIndexes:
+    def test_empty_list(self):
+        assert _format_indexes([]) == "No indexes found."
+
+    def test_regular_index(self):
+        rows = [{
+            "schema_name": "public",
+            "table_name": "orders",
+            "index_name": "idx_orders_status",
+            "is_unique": False,
+            "is_primary": False,
+            "columns": ["status"],
+        }]
+        result = _format_indexes(rows)
+        assert "idx_orders_status" in result
+        assert "[INDEX]" in result
+        assert "status" in result
+
+    def test_unique_index(self):
+        rows = [{
+            "schema_name": "public",
+            "table_name": "users",
+            "index_name": "idx_users_email",
+            "is_unique": True,
+            "is_primary": False,
+            "columns": ["email"],
+        }]
+        result = _format_indexes(rows)
+        assert "[UNIQUE]" in result
+
+    def test_primary_key(self):
+        rows = [{
+            "schema_name": "public",
+            "table_name": "users",
+            "index_name": "users_pkey",
+            "is_unique": True,
+            "is_primary": True,
+            "columns": ["id"],
+        }]
+        result = _format_indexes(rows)
+        assert "[PRIMARY KEY]" in result
+
+    def test_composite_index(self):
+        rows = [{
+            "schema_name": "public",
+            "table_name": "orders",
+            "index_name": "idx_orders_status_created",
+            "is_unique": False,
+            "is_primary": False,
+            "columns": ["status", "created_at"],
+        }]
+        result = _format_indexes(rows)
+        assert "status, created_at" in result
+
