@@ -1,0 +1,147 @@
+"""Unit tests for the plan analyzer."""
+
+from pg_explain_mcp.analyzer import (
+    DEFAULT_CHECKS,
+    DiskSpillHashCheck,
+    DiskSpillSortCheck,
+    EstimateMismatchCheck,
+    NestedLoopCheck,
+    SeqScanCheck,
+    analyze_plan,
+)
+
+
+# ---------------------------------------------------------------------------
+# Individual checks
+# ---------------------------------------------------------------------------
+
+
+class TestSeqScanCheck:
+    def test_small_table_is_ok(self):
+        node = {"Node Type": "Seq Scan", "Actual Rows": 100, "Relation Name": "t"}
+        assert SeqScanCheck().check(node) == []
+
+    def test_large_table_is_reported(self):
+        node = {"Node Type": "Seq Scan", "Actual Rows": 5000, "Relation Name": "t"}
+        issues = SeqScanCheck().check(node)
+        assert len(issues) == 1
+        assert issues[0].type == "seq_scan"
+        assert issues[0].severity == "warning"
+        assert "t" in issues[0].message
+
+    def test_other_node_type_is_ignored(self):
+        node = {"Node Type": "Index Scan", "Actual Rows": 999999}
+        assert SeqScanCheck().check(node) == []
+
+
+class TestEstimateMismatchCheck:
+    def test_close_estimate_is_ok(self):
+        node = {"Node Type": "Hash Join", "Plan Rows": 100, "Actual Rows": 120}
+        assert EstimateMismatchCheck().check(node) == []
+
+    def test_large_mismatch_is_reported(self):
+        node = {"Node Type": "Hash Join", "Plan Rows": 100, "Actual Rows": 5000}
+        issues = EstimateMismatchCheck().check(node)
+        assert len(issues) == 1
+        assert issues[0].type == "estimate_mismatch"
+
+    def test_missing_values_do_not_crash(self):
+        assert EstimateMismatchCheck().check({"Node Type": "X"}) == []
+
+
+class TestDiskSpillSortCheck:
+    def test_in_memory_sort_is_ok(self):
+        node = {"Node Type": "Sort", "Sort Method": "quicksort"}
+        assert DiskSpillSortCheck().check(node) == []
+
+    def test_external_sort_is_reported(self):
+        node = {"Node Type": "Sort", "Sort Method": "external merge Disk: 2048kB"}
+        issues = DiskSpillSortCheck().check(node)
+        assert len(issues) == 1
+        assert issues[0].type == "disk_spill_sort"
+
+
+class TestDiskSpillHashCheck:
+    def test_single_batch_is_ok(self):
+        assert DiskSpillHashCheck().check({"Hash Batches": 1}) == []
+
+    def test_multiple_batches_is_reported(self):
+        issues = DiskSpillHashCheck().check({"Node Type": "Hash", "Hash Batches": 8})
+        assert len(issues) == 1
+        assert issues[0].type == "disk_spill_hash"
+
+
+class TestNestedLoopCheck:
+    def test_few_loops_is_ok(self):
+        node = {"Node Type": "Nested Loop", "Actual Loops": 10}
+        assert NestedLoopCheck().check(node) == []
+
+    def test_many_loops_is_reported(self):
+        node = {"Node Type": "Nested Loop", "Actual Loops": 100_000}
+        issues = NestedLoopCheck().check(node)
+        assert len(issues) == 1
+        assert issues[0].severity == "info"
+
+
+# ---------------------------------------------------------------------------
+# analyze_plan — end-to-end
+# ---------------------------------------------------------------------------
+
+
+class TestAnalyzePlan:
+    def test_empty_plan(self):
+        result = analyze_plan([])
+        assert result["issues"] == []
+        assert result["summary"] == "Empty plan"
+
+    def test_healthy_plan(self):
+        plan = [{
+            "Plan": {"Node Type": "Index Scan", "Actual Rows": 10},
+            "Execution Time": 0.5,
+            "Planning Time": 0.1,
+        }]
+        result = analyze_plan(plan)
+        assert result["issue_count"] == 0
+        assert "No issues found" in result["summary"]
+        assert result["total_time_ms"] == 0.6
+
+    def test_plan_with_seq_scan(self):
+        plan = [{
+            "Plan": {
+                "Node Type": "Seq Scan",
+                "Relation Name": "orders",
+                "Actual Rows": 5000,
+                "Plans": [],
+            },
+            "Execution Time": 42.0,
+            "Planning Time": 1.0,
+        }]
+        result = analyze_plan(plan)
+        assert result["issue_count"] == 1
+        assert result["issues"][0]["type"] == "seq_scan"
+
+    def test_nested_plan_is_traversed(self):
+        plan = [{
+            "Plan": {
+                "Node Type": "Hash Join",
+                "Plans": [
+                    {"Node Type": "Seq Scan", "Actual Rows": 9000, "Relation Name": "a"},
+                    {"Node Type": "Seq Scan", "Actual Rows": 8000, "Relation Name": "b"},
+                ],
+            },
+            "Execution Time": 10.0,
+            "Planning Time": 0.5,
+        }]
+        result = analyze_plan(plan)
+        assert result["issue_count"] == 2
+
+    def test_custom_checks_registry(self):
+        plan = [{
+            "Plan": {"Node Type": "Seq Scan", "Actual Rows": 5000, "Relation Name": "t"},
+            "Execution Time": 1.0,
+            "Planning Time": 0.1,
+        }]
+        result = analyze_plan(plan, checks=())
+        assert result["issue_count"] == 0
+        assert len(DEFAULT_CHECKS) > 0
+
