@@ -8,7 +8,6 @@ checks (adapters) to every node. To add a new check, implement the
 from dataclasses import asdict, dataclass
 from typing import Any, Protocol
 
-
 SEVERITY_WARNING = "warning"
 SEVERITY_INFO = "info"
 
@@ -116,6 +115,7 @@ class EstimateMismatchCheck:
                 node=node_type,
             )
         ]
+
 
 class DiskSpillSortCheck:
     """Sort operation spilled to disk — work_mem is too small."""
@@ -392,3 +392,38 @@ def _make_summary(issues: list[Issue], exec_time: float) -> str:
         f"Found {len(issues)} issues ({len(warnings)} critical). "
         f"Execution time: {exec_time:.2f} ms."
     )
+
+
+def summarize_plan_node(node: dict[str, Any], depth: int = 0) -> list[dict[str, Any]]:
+    """Flatten a plan tree into a compact list of nodes.
+
+    Returns one entry per node with only the fields that matter for
+    reasoning: type, relation/index, actual rows, and (if present)
+    heap fetches or disk reads.
+    """
+    entry: dict[str, Any] = {
+        "depth": depth,
+        "node_type": node.get("Node Type", "?"),
+    }
+
+    if "Relation Name" in node:
+        entry["relation"] = node["Relation Name"]
+    if "Index Name" in node:
+        entry["index"] = node["Index Name"]
+    if "Actual Rows" in node:
+        entry["actual_rows"] = node["Actual Rows"]
+    if "Plan Rows" in node:
+        entry["plan_rows"] = node["Plan Rows"]
+    if "Heap Fetches" in node:
+        entry["heap_fetches"] = node["Heap Fetches"]
+    if "Shared Read Blocks" in node:
+        entry["shared_read_blocks"] = node["Shared Read Blocks"]
+    if "Sort Method" in node:
+        entry["sort_method"] = node["Sort Method"]
+    if "Hash Batches" in node:
+        entry["hash_batches"] = node["Hash Batches"]
+
+    result = [entry]
+    for child in node.get("Plans", []):
+        result.extend(summarize_plan_node(child, depth + 1))
+    return result

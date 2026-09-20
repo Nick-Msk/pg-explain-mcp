@@ -6,12 +6,12 @@ from pg_explain_mcp.analyzer import (
     DiskSpillHashCheck,
     DiskSpillSortCheck,
     EstimateMismatchCheck,
-    NestedLoopCheck,
     IndexScanCheck,
+    NestedLoopCheck,
     SeqScanCheck,
     analyze_plan,
+    summarize_plan_node,
 )
-
 
 # ---------------------------------------------------------------------------
 # Individual checks
@@ -61,6 +61,7 @@ class TestEstimateMismatchCheck:
         issues = EstimateMismatchCheck().check(node)
         assert len(issues) == 1
         assert issues[0].type == "estimate_mismatch"
+
 
 class TestDiskSpillSortCheck:
     def test_in_memory_sort_is_ok(self):
@@ -206,6 +207,45 @@ class TestIndexScanCheck:
         assert IndexScanCheck().check({"Node Type": "Index Scan"}) == []
         assert IndexScanCheck().check({"Node Type": "Index Only Scan"}) == []
         assert IndexScanCheck().check({}) == []
+
+
+class TestSummarizePlanNode:
+    def test_simple_node(self):
+        node = {
+            "Node Type": "Seq Scan",
+            "Relation Name": "orders",
+            "Actual Rows": 5000,
+            "Plan Rows": 4800,
+        }
+        result = summarize_plan_node(node)
+        assert len(result) == 1
+        assert result[0]["node_type"] == "Seq Scan"
+        assert result[0]["relation"] == "orders"
+        assert result[0]["actual_rows"] == 5000
+        assert result[0]["depth"] == 0
+
+    def test_nested_tree_is_flattened(self):
+        node = {
+            "Node Type": "Hash Join",
+            "Plans": [
+                {"Node Type": "Seq Scan", "Relation Name": "a", "Actual Rows": 100},
+                {"Node Type": "Index Scan", "Index Name": "idx_b", "Actual Rows": 50},
+            ],
+        }
+        result = summarize_plan_node(node)
+        assert len(result) == 3
+        assert result[0]["node_type"] == "Hash Join"
+        assert result[0]["depth"] == 0
+        assert result[1]["depth"] == 1
+        assert result[2]["depth"] == 1
+        assert result[2]["index"] == "idx_b"
+
+    def test_optional_fields_are_skipped(self):
+        node = {"Node Type": "Limit", "Actual Rows": 10}
+        result = summarize_plan_node(node)
+        assert "relation" not in result[0]
+        assert "index" not in result[0]
+        assert "heap_fetches" not in result[0]
 
 
 # ---------------------------------------------------------------------------
