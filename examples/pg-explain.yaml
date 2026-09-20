@@ -1,0 +1,16 @@
+name: PostgreSQL Explain MCP
+version: 0.0.1
+schema: v1
+mcpServers:
+  - name: pg-explain
+    command: /path/to/pg-explain-mcp/.venv/bin/python
+    args:
+      - "-m"
+      - "pg_explain_mcp.server"
+    env:
+      PG_HOST: localhost
+      PG_PORT: "5432"
+      PG_USER: your_user
+      PG_PASSWORD: your_password
+      PG_DATABASE: your_database
+

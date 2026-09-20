@@ -200,6 +200,13 @@ pg-explain-mcp/
 └── LICENSE
 ```
 
+## Continue.dev Integration
+
+Ready-to-use configuration files are available in [`examples/`](examples/):
+
+- [`examples/mcpServers/pg-explain.yaml`](examples/mcpServers/pg-explain.yaml) — MCP server config
+- [`examples/postgres-agent.md`](examples/postgres-agent.md) — agent prompt
+
 ## Contributing
 
 Pull requests are welcome. For major changes, please open an issue first
