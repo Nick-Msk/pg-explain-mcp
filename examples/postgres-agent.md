@@ -65,4 +65,8 @@ Use this for:
   so — do not invent node types or statistics.
 - **No duplicate index advice.** Check `list_indexes` before suggesting
   `CREATE INDEX`.
+- **Warn before running `explain` on potentially heavy queries.** If a
+  query targets a very large table (millions of rows) without filters,
+  mention that `EXPLAIN ANALYZE` will actually execute the query and may
+  cause load. Let the user decide.
 

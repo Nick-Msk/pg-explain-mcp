@@ -134,6 +134,11 @@ You can also test the server standalone via the official MCP Inspector:
 mcp dev src/pg_explain_mcp/server.py
 ```
 
+> ⚠️ **Warning.** `explain` runs `EXPLAIN (ANALYZE, ...)`, which
+> **actually executes** the query. Avoid running it against production
+> databases during peak hours. Use a replica or staging environment
+> whenever possible.
+
 ## Example
 
 Prompt:
@@ -215,3 +220,13 @@ to discuss what you would like to change.
 ## License
 
 MIT — see [LICENSE](LICENSE) for details.
+
+## Disclaimer
+
+This project is a **diagnostic tool provided "as is"**. Recommendations
+from the analyzer — or from an LLM assistant using it — are suggestions,
+not guarantees. Always validate against your own database before applying
+changes to a production system.
+
+See [`DISCLAIMER.md`](DISCLAIMER.md) for the full text.
+

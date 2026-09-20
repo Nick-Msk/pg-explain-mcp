@@ -39,6 +39,7 @@ pg-explain-mcp = "pg_explain_mcp.server:main"
 Homepage = "https://github.com/Nick-Msk/pg-explain-mcp"
 Repository = "https://github.com/Nick-Msk/pg-explain-mcp"
 Issues = "https://github.com/Nick-Msk/pg-explain-mcp/issues"
+Changelog = "https://github.com/Nick-Msk/pg-explain-mcp/blob/main/CHANGELOG.md"
 
 [build-system]
 requires = ["setuptools>=68"]
