@@ -151,6 +151,27 @@ fixtures/
 └── README.md
 ```
 
+## Static analysis
+
+`mcp_explain_tool` procedures can be checked with [`plpgsql_check`](https://github.com/okbob/plpgsql_check):
+
+```sql
+create extension if not exists plpgsql_check;
+
+select p.proname,
+       plpgsql_check_function(
+	   		p.oid::regprocedure,
+			performance_warnings := true
+	   ) as issues
+from pg_proc p
+join pg_namespace n on n.oid = p.pronamespace
+where n.nspname = 'mcp_explain_tool'
+  and p.prokind = 'p'
+order by p.proname;
+```
+
+Expected: no rows (clean output).
+
 ## See also
 
 - [`../README.md`](../README.md) — main project README

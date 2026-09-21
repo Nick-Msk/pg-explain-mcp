@@ -40,8 +40,6 @@ create procedure fill_index_scan(totalcount int)
 language plpgsql
 set search_path = mcp_explain_tool, pg_catalog
 as $$
-declare
-    i integer;
 begin
     insert into data_index_scan_norm (val, num, pad)
     select md5(j::text), (random() * 1_000_000)::int, repeat('x', 200)
