@@ -101,6 +101,12 @@ class TestDiskSpillSortCheck:
         assert len(issues) == 1
         assert issues[0].type == "disk_spill_sort"
 
+    def test_key_order_is_stable(self):
+        node = {"Node Type": "Seq Scan", "Relation Name": "t"}
+        result = summarize_plan_node(node)
+        keys = list(result[0].keys())
+        assert keys[:2] == ["depth", "node_type"]
+
 
 class TestDiskSpillHashCheck:
     def test_single_batch_is_ok(self):

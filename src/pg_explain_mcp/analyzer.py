@@ -140,24 +140,44 @@ class EstimateMismatchCheck:
 
 
 class DiskSpillSortCheck:
-    """Sort operation spilled to disk — work_mem is too small."""
+    """Sort spilled to disk — work_mem is too small.
+
+    In the JSON plan, PostgreSQL splits the spill info across three
+    fields: ``Sort Method`` (e.g. ``external merge``), ``Sort Space Type``
+    (``Disk`` or ``Memory``) and ``Sort Space Used`` (kB). The check
+    reads all three and includes the size in the message, so the LLM
+    can recommend a realistic ``work_mem`` value.
+    """
 
     name = "disk_spill_sort"
 
     def check(self, node: dict[str, Any]) -> list[Issue]:
-        if not node.get("Sort Method", "").startswith("external"):
+        method = node.get("Sort Method", "")
+        if not method.startswith("external"):
             return []
 
-        node_type = node.get("Node Type", "")
+        used = node.get("Sort Space Used", 0)
+        space_type = node.get("Sort Space Type", "")
+
+        if used and space_type == "Disk":
+            size_mb = round(used / 1024, 1)
+            size_hint = (
+                f" ({used}kB ≈ {size_mb}MB written to disk — "
+                "set work_mem above this value or add an index to avoid the sort)"
+            )
+        elif used:
+            size_hint = f" ({used}kB used)"
+        else:
+            size_hint = ""
+
         return [
             Issue(
                 severity=SEVERITY_WARNING,
                 type=self.name,
                 message=(
-                    f"Sort operation on '{node_type}' spilled to disk. "
-                    "Increase work_mem or optimize the query."
+                    f"Sort spilled to disk{size_hint}. Increase work_mem or optimize the query."
                 ),
-                node=node_type,
+                node="Sort",
             )
         ]
 
@@ -416,36 +436,38 @@ def _make_summary(issues: list[Issue], exec_time: float) -> str:
     )
 
 
+# Mapping: EXPLAIN JSON field → key in our compact output.
+# Order matters only for readability; lookup is by key.
+_PLAN_FIELDS: dict[str, str] = {
+    "Relation Name": "relation",
+    "Index Name": "index",
+    "Actual Rows": "actual_rows",
+    "Plan Rows": "plan_rows",
+    "Rows Removed by Filter": "rows_removed_by_filter",
+    "Heap Fetches": "heap_fetches",
+    "Shared Read Blocks": "shared_read_blocks",
+    "Sort Method": "sort_method",
+    "Sort Space Type": "sort_space_type",
+    "Sort Space Used": "sort_space_used_kb",
+    "Hash Batches": "hash_batches",
+}
+
+
 def summarize_plan_node(node: dict[str, Any], depth: int = 0) -> list[dict[str, Any]]:
     """Flatten a plan tree into a compact list of nodes.
 
-    Returns one entry per node with only the fields that matter for
-    reasoning: type, relation/index, actual rows, and (if present)
-    heap fetches or disk reads.
+    Each entry keeps only the fields listed in ``_PLAN_FIELDS`` plus
+    ``depth`` and ``node_type``. Unknown fields are ignored — the goal
+    is to give the LLM the small set of values that matter for
+    reasoning, not the entire plan.
     """
     entry: dict[str, Any] = {
         "depth": depth,
         "node_type": node.get("Node Type", "?"),
     }
-
-    if "Relation Name" in node:
-        entry["relation"] = node["Relation Name"]
-    if "Index Name" in node:
-        entry["index"] = node["Index Name"]
-    if "Actual Rows" in node:
-        entry["actual_rows"] = node["Actual Rows"]
-    if "Plan Rows" in node:
-        entry["plan_rows"] = node["Plan Rows"]
-    if "Rows Removed by Filter" in node:
-        entry["rows_removed_by_filter"] = node["Rows Removed by Filter"]
-    if "Heap Fetches" in node:
-        entry["heap_fetches"] = node["Heap Fetches"]
-    if "Shared Read Blocks" in node:
-        entry["shared_read_blocks"] = node["Shared Read Blocks"]
-    if "Sort Method" in node:
-        entry["sort_method"] = node["Sort Method"]
-    if "Hash Batches" in node:
-        entry["hash_batches"] = node["Hash Batches"]
+    for src, dst in _PLAN_FIELDS.items():
+        if src in node:
+            entry[dst] = node[src]
 
     result = [entry]
     for child in node.get("Plans", []):
