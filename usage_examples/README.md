@@ -1,3 +1,34 @@
+## test environment
+
+All examples in this directory were captured on the following setup.
+Results may vary on different hardware, PostgreSQL versions, or
+configuration — especially numbers like execution time, spill size,
+and `shared_read_blocks`.
+
+| component        | value                                       |
+|------------------|---------------------------------------------|
+| machine          | MacBook Pro (Apple Silicon, arm64)          |
+| OS               | macOS 26.x (Tahoe)                          |
+| PostgreSQL       | 18.6 (built from source)                    |
+| `work_mem`       | 20 MB                                       |
+| `shared_buffers` | 128 MB                                      |
+| Python           | 3.12.14 (Homebrew)                          |
+| MCP client       | Continue.dev                                |
+| LLM              | `google/gemma-4-26b-a4b-qat` via LM Studio  |
+
+The two tables per adapter are sized so that:
+
+- the `_norm` table stays **below** the thresholds of every `PlanCheck`
+  (so no warnings are emitted), and
+- the `_<failing>` table **exceeds** the threshold of exactly one check.
+
+This keeps each example isolated: the `_norm` case should report
+`issue_count: 0`, and the `_<failing>` case should report only the
+specific issue the example is about — plus, occasionally, an
+unrelated `seq_scan` when the underlying scan reads more than
+1000 rows (see [pg_seq_scan_adapters/](pg_seq_scan_adapters/) for
+details).
+
 # usage examples
 
 Real-world runs of `pg-explain-mcp` against PostgreSQL.
