@@ -79,6 +79,7 @@ def explain_query(sql: str, analyze: bool = True, buffers: bool = True) -> dict[
             result = cur.fetchone()
             return result
 
+
 def get_indexes(table_name: str | None = None) -> list[dict[str, Any]]:
     """Return a list of indexes for user tables.
 
@@ -117,4 +118,3 @@ def get_indexes(table_name: str | None = None) -> list[dict[str, Any]]:
         with conn.cursor() as cur:
             cur.execute(query, {"table_name": table_name})
             return cur.fetchall()
-

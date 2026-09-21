@@ -16,88 +16,143 @@
 --  IndexScanCheck
 -- -----------------------------------------------------------------------------
 
-CREATE TABLE data_index_scan_norm (
-    id   bigserial PRIMARY KEY,
-    val  text      NOT NULL,
-    num  integer   NOT NULL,
+create table data_index_scan_norm (
+    id   bigserial primary key,
+    val  text      not null,
+    num  integer   not null,
     pad  text
 );
 
-CREATE INDEX idx_data_index_scan_norm_val
-    ON data_index_scan_norm (val);
+create index idx_data_index_scan_norm_val on data_index_scan_norm (val);
 
-CREATE TABLE data_index_scan_unclastered (
-    id   bigserial PRIMARY KEY,
-    val  text      NOT NULL,
-    num  integer   NOT NULL,
+create table data_index_scan_unclastered (
+    id   bigserial primary key,
+    val  text      not null,
+    num  integer   not null,
     pad  text
 );
 
-ALTER TABLE data_index_scan_unclastered SET (autovacuum_enabled = false);
+alter table data_index_scan_unclastered set (autovacuum_enabled = false);
 
-CREATE INDEX idx_data_index_scan_unclastered_val
-    ON data_index_scan_unclastered (val);
+create index idx_data_index_scan_unclastered_val on data_index_scan_unclastered (val);
 
-CREATE PROCEDURE fill_index_scan(totalcount int)
-LANGUAGE plpgsql
-AS $$
-DECLARE
+create procedure fill_index_scan(totalcount int)
+language plpgsql
+set search_path = mcp_explain_tool, pg_catalog
+as $$
+declare
     i integer;
-BEGIN
-    INSERT INTO data_index_scan_norm (val, num, pad)
-    SELECT md5(i::text), (random() * 1_000_000)::int, repeat('x', 200)
-    FROM generate_series(1, totalcount) AS i;
+begin
+    insert into data_index_scan_norm (val, num, pad)
+    select md5(j::text), (random() * 1_000_000)::int, repeat('x', 200)
+    from generate_series(1, totalcount) as j;
 
-    INSERT INTO data_index_scan_unclastered (val, num, pad)
-    SELECT md5(i::text), (random() * 1_000_000)::int, repeat('x', 200)
-    FROM generate_series(1, totalcount) AS i;
+    insert into data_index_scan_unclastered (val, num, pad)
+    select md5(j::text), (random() * 1_000_000)::int, repeat('x', 200)
+    from generate_series(1, totalcount) as j;
 
-    FOR i IN 1..20 LOOP
-        UPDATE data_index_scan_unclastered
-        SET pad = repeat('y', 200)
-        WHERE id % 5 = 0;
+    for i in 1..20 loop
+        update data_index_scan_unclastered
+        set pad = repeat('y', 200)
+        where id % 5 = 0;
 
-        DELETE FROM data_index_scan_unclastered
-        WHERE id % 7 = 0 AND id > totalcount / 10;
+        delete from data_index_scan_unclastered
+        where id % 7 = 0 and id > totalcount / 10;
 
-        INSERT INTO data_index_scan_unclastered (val, num, pad)
-        SELECT md5((totalcount * 2 + i * 100_000 + j)::text),
+        insert into data_index_scan_unclastered (val, num, pad)
+        select md5((totalcount * 2 + i * 100_000 + j)::text),
                (random() * 1_000_000)::int,
                repeat('z', 200)
-        FROM generate_series(1, 50_000) AS j;
-    END LOOP;
+        from generate_series(1, 50_000) as j;
+    end loop;
 
-    ANALYZE data_index_scan_norm;
-    ANALYZE data_index_scan_unclastered;
-END;
+    analyze data_index_scan_norm;
+    analyze data_index_scan_unclastered;
+end;
 $$;
 
-CREATE PROCEDURE clear_index_scan()
-LANGUAGE plpgsql
-AS $$
-BEGIN
-    TRUNCATE data_index_scan_norm, data_index_scan_unclastered
-        RESTART IDENTITY;
-END;
+create procedure clear_index_scan()
+language plpgsql
+set search_path = mcp_explain_tool, pg_catalog
+as $$
+begin
+    truncate data_index_scan_norm, data_index_scan_unclastered restart identity;
+end;
+$$;
+
+
+-- -----------------------------------------------------------------------------
+--  SeqScanCheck
+-- -----------------------------------------------------------------------------
+
+create table data_seq_scan_norm (
+    id   bigserial primary key,
+    val  integer   not null,
+    pad  text
+);
+
+create index idx_data_seq_scan_norm_val on data_seq_scan_norm (val);
+
+create table data_seq_scan_nonindex (
+    id   bigserial primary key,
+    val  integer   not null,
+    pad  text
+);
+
+-- no index on val — the planner is forced into a seq scan.
+
+create procedure fill_seq_scan(totalcount int)
+language plpgsql
+set search_path = mcp_explain_tool, pg_catalog
+as $$
+begin
+    insert into data_seq_scan_norm (val, pad)
+    select (random() * 1_000_000)::int, repeat('x', 200)
+    from generate_series(1, totalcount) as i;
+
+    insert into data_seq_scan_nonindex (val, pad)
+    select (random() * 1_000_000)::int, repeat('x', 200)
+    from generate_series(1, totalcount) as i;
+
+    analyze data_seq_scan_norm;
+    analyze data_seq_scan_nonindex;
+end;
+$$;
+
+create procedure clear_seq_scan()
+language plpgsql
+set search_path = mcp_explain_tool, pg_catalog
+as $$
+begin
+    truncate data_seq_scan_norm, data_seq_scan_nonindex restart identity;
+end;
 $$;
 
 -- -----------------------------------------------------------------------------
 --  Aggregates (grow as adapters are added)
 -- -----------------------------------------------------------------------------
 
-CREATE PROCEDURE fill_all(totalcount int)
-LANGUAGE plpgsql
-AS $$
-BEGIN
-    CALL fill_index_scan(totalcount);
-END;
+-- -----------------------------------------------------------------------------
+--  aggregates
+-- -----------------------------------------------------------------------------
+
+create procedure fill_all(totalcount int)
+language plpgsql
+set search_path = mcp_explain_tool, pg_catalog
+as $$
+begin
+    call fill_seq_scan(totalcount);
+    call fill_index_scan(totalcount);
+end;
 $$;
 
-CREATE PROCEDURE clear_all()
-LANGUAGE plpgsql
-AS $$
-BEGIN
-    CALL clear_index_scan();
-END;
+create procedure clear_all()
+language plpgsql
+set search_path = mcp_explain_tool, pg_catalog
+as $$
+begin
+    call clear_seq_scan();
+    call clear_index_scan();
+end;
 $$;
 

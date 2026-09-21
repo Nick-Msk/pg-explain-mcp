@@ -12,6 +12,7 @@ from pg_explain_mcp.analyzer import (
     analyze_plan,
     summarize_plan_node,
 )
+from pg_explain_mcp.server import _format_indexes
 
 # ---------------------------------------------------------------------------
 # Individual checks
@@ -24,12 +25,38 @@ class TestSeqScanCheck:
         assert SeqScanCheck().check(node) == []
 
     def test_large_table_is_reported(self):
-        node = {"Node Type": "Seq Scan", "Actual Rows": 5000, "Relation Name": "t"}
+        node = {
+            "Node Type": "Seq Scan",
+            "Actual Rows": 5000,
+            "Relation Name": "t",
+        }
         issues = SeqScanCheck().check(node)
         assert len(issues) == 1
         assert issues[0].type == "seq_scan"
-        assert issues[0].severity == "warning"
-        assert "t" in issues[0].message
+        assert "5000 rows" in issues[0].message
+
+    def test_many_rows_filtered_out_is_reported(self):
+        """Seq Scan read 1M rows but returned only 100 — still a problem."""
+        node = {
+            "Node Type": "Seq Scan",
+            "Relation Name": "big",
+            "Actual Rows": 100,
+            "Rows Removed by Filter": 999_900,
+        }
+        issues = SeqScanCheck().check(node)
+        assert len(issues) == 1
+        assert issues[0].type == "seq_scan"
+        assert "1000000 rows" in issues[0].message
+        assert "filtered out" in issues[0].message
+
+    def test_boundary_value_is_ok(self):
+        node = {
+            "Node Type": "Seq Scan",
+            "Actual Rows": 500,
+            "Rows Removed by Filter": 500,
+            "Relation Name": "t",
+        }
+        assert SeqScanCheck().check(node) == []
 
     def test_other_node_type_is_ignored(self):
         node = {"Node Type": "Index Scan", "Actual Rows": 999999}
@@ -354,63 +381,70 @@ class TestAnalyzePlan:
         assert result["issue_count"] == 1
         assert result["issues"][0]["type"] == "index_scan_heap_locality"
 
+
 # ---------------------------------------------------------------------------
 # list_indexes formatting
 # ---------------------------------------------------------------------------
 
-from pg_explain_mcp.server import _format_indexes
 
 class TestFormatIndexes:
     def test_empty_list(self):
         assert _format_indexes([]) == "No indexes found."
 
     def test_regular_index(self):
-        rows = [{
-            "schema_name": "public",
-            "table_name": "orders",
-            "index_name": "idx_orders_status",
-            "is_unique": False,
-            "is_primary": False,
-            "columns": ["status"],
-        }]
+        rows = [
+            {
+                "schema_name": "public",
+                "table_name": "orders",
+                "index_name": "idx_orders_status",
+                "is_unique": False,
+                "is_primary": False,
+                "columns": ["status"],
+            }
+        ]
         result = _format_indexes(rows)
         assert "idx_orders_status" in result
         assert "[INDEX]" in result
         assert "status" in result
 
     def test_unique_index(self):
-        rows = [{
-            "schema_name": "public",
-            "table_name": "users",
-            "index_name": "idx_users_email",
-            "is_unique": True,
-            "is_primary": False,
-            "columns": ["email"],
-        }]
+        rows = [
+            {
+                "schema_name": "public",
+                "table_name": "users",
+                "index_name": "idx_users_email",
+                "is_unique": True,
+                "is_primary": False,
+                "columns": ["email"],
+            }
+        ]
         result = _format_indexes(rows)
         assert "[UNIQUE]" in result
 
     def test_primary_key(self):
-        rows = [{
-            "schema_name": "public",
-            "table_name": "users",
-            "index_name": "users_pkey",
-            "is_unique": True,
-            "is_primary": True,
-            "columns": ["id"],
-        }]
+        rows = [
+            {
+                "schema_name": "public",
+                "table_name": "users",
+                "index_name": "users_pkey",
+                "is_unique": True,
+                "is_primary": True,
+                "columns": ["id"],
+            }
+        ]
         result = _format_indexes(rows)
         assert "[PRIMARY KEY]" in result
 
     def test_composite_index(self):
-        rows = [{
-            "schema_name": "public",
-            "table_name": "orders",
-            "index_name": "idx_orders_status_created",
-            "is_unique": False,
-            "is_primary": False,
-            "columns": ["status", "created_at"],
-        }]
+        rows = [
+            {
+                "schema_name": "public",
+                "table_name": "orders",
+                "index_name": "idx_orders_status_created",
+                "is_unique": False,
+                "is_primary": False,
+                "columns": ["status", "created_at"],
+            }
+        ]
         result = _format_indexes(rows)
         assert "status, created_at" in result
-

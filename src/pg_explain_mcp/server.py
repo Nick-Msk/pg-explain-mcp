@@ -9,6 +9,7 @@ from pg_explain_mcp.db import explain_query, get_indexes, get_schema
 
 mcp = FastMCP("pg-explain")
 
+
 def _format_indexes(rows: list[dict[str, any]]) -> str:
     """Format index rows into a human-readable string."""
     if not rows:
@@ -24,10 +25,10 @@ def _format_indexes(rows: list[dict[str, any]]) -> str:
         else:
             kind = "INDEX"
         lines.append(
-            f"{row['schema_name']}.{row['table_name']} → "
-            f"{row['index_name']} [{kind}] ({cols})"
+            f"{row['schema_name']}.{row['table_name']} → {row['index_name']} [{kind}] ({cols})"
         )
     return "\n".join(lines)
+
 
 @mcp.tool()
 def ping() -> str:
@@ -46,6 +47,7 @@ def list_tables() -> str:
     result = "\n".join(f"{name}: {', '.join(cols)}" for name, cols in tables.items())
     return result or "No tables found."
 
+
 @mcp.tool()
 def list_indexes(table_name: str | None = None) -> str:
     """Return a list of indexes for user tables.
@@ -56,6 +58,7 @@ def list_indexes(table_name: str | None = None) -> str:
     """
     rows = get_indexes(table_name)
     return _format_indexes(rows)
+
 
 @mcp.tool()
 def explain(sql: str) -> str:

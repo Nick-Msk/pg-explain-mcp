@@ -48,7 +48,14 @@ class PlanCheck(Protocol):
 
 
 class SeqScanCheck:
-    """Sequential scan on a large table — likely missing an index."""
+    """Sequential scan that reads a large number of rows.
+
+    A Seq Scan on a small table is fine. A Seq Scan that touches
+    thousands or millions of rows — even if the query returns only a
+    handful — usually indicates a missing index or a non-selective
+    query. The check therefore looks at the total number of rows the
+    node *read* (returned + filtered out), not just the rows it emitted.
+    """
 
     name = "seq_scan"
     THRESHOLD_ROWS = 1000
@@ -56,17 +63,32 @@ class SeqScanCheck:
     def check(self, node: dict[str, Any]) -> list[Issue]:
         if node.get("Node Type") != "Seq Scan":
             return []
-        rows = node.get("Actual Rows", 0)
-        if rows <= self.THRESHOLD_ROWS:
+
+        actual = node.get("Actual Rows", 0)
+        removed = node.get("Rows Removed by Filter", 0)
+        total_read = actual + removed
+
+        if total_read <= self.THRESHOLD_ROWS:
             return []
+
+        relation = node.get("Relation Name", "?")
+        if removed > actual:
+            message = (
+                f"Sequential scan on '{relation}' read {total_read} rows "
+                f"({actual} returned, {removed} filtered out). "
+                "Consider adding an index on the filter column."
+            )
+        else:
+            message = (
+                f"Sequential scan on '{relation}' processed {total_read} rows. "
+                "Consider adding an index."
+            )
+
         return [
             Issue(
                 severity=SEVERITY_WARNING,
                 type=self.name,
-                message=(
-                    f"Sequential scan on '{node.get('Relation Name', '?')}' "
-                    f"processed {rows} rows. Consider adding an index."
-                ),
+                message=message,
                 node="Seq Scan",
             )
         ]
@@ -414,6 +436,8 @@ def summarize_plan_node(node: dict[str, Any], depth: int = 0) -> list[dict[str, 
         entry["actual_rows"] = node["Actual Rows"]
     if "Plan Rows" in node:
         entry["plan_rows"] = node["Plan Rows"]
+    if "Rows Removed by Filter" in node:
+        entry["rows_removed_by_filter"] = node["Rows Removed by Filter"]
     if "Heap Fetches" in node:
         entry["heap_fetches"] = node["Heap Fetches"]
     if "Shared Read Blocks" in node:
