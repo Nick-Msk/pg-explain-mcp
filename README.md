@@ -4,6 +4,7 @@
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![MCP](https://img.shields.io/badge/MCP-compatible-purple)
+![SQL lint](https://img.shields.io/badge/sql%20lint-sqlfluff-blue)
 
 An MCP (Model Context Protocol) server for analyzing PostgreSQL query
 execution plans. Built as a bridge between LLM-based coding assistants
