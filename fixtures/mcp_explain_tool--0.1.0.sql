@@ -129,6 +129,51 @@ end;
 $$;
 
 -- -----------------------------------------------------------------------------
+--  disk_spill_sort
+-- -----------------------------------------------------------------------------
+
+create table data_disk_spill_sort_norm (
+    id   bigserial primary key,
+    val  integer   not null,
+    pad  text
+);
+
+create table data_disk_spill_sort_spill (
+    id   bigserial primary key,
+    val  integer   not null,
+    pad  text
+);
+
+create procedure fill_disk_spill_sort(totalcount int)
+language plpgsql
+set search_path = mcp_explain_tool, pg_catalog
+as $$
+begin
+    -- norm: ~10k rows × 60 bytes ≈ 600 kB — fits in the default 4 MB work_mem
+    insert into data_disk_spill_sort_norm (val, pad)
+    select (random() * 1_000_000)::int, repeat('x', 50)
+    from generate_series(1, 10000) as n;
+
+    -- spill: 1M rows × 200 bytes ≈ 200 MB — spills to disk
+    insert into data_disk_spill_sort_spill (val, pad)
+    select (random() * 1_000_000)::int, repeat('x', 200)
+    from generate_series(1, totalcount) as n;
+
+    analyze data_disk_spill_sort_norm;
+    analyze data_disk_spill_sort_spill;
+end;
+$$;
+
+create procedure clear_disk_spill_sort()
+language plpgsql
+set search_path = mcp_explain_tool, pg_catalog
+as $$
+begin
+    truncate data_disk_spill_sort_norm, data_disk_spill_sort_spill restart identity;
+end;
+$$;
+
+-- -----------------------------------------------------------------------------
 --  Aggregates (grow as adapters are added)
 -- -----------------------------------------------------------------------------
 
@@ -143,6 +188,7 @@ as $$
 begin
     call fill_seq_scan(totalcount);
     call fill_index_scan(totalcount);
+    call fill_disk_spill_sort(totalcount);
 end;
 $$;
 
@@ -153,6 +199,6 @@ as $$
 begin
     call clear_seq_scan();
     call clear_index_scan();
+    call clear_disk_spill_sort();
 end;
 $$;
-

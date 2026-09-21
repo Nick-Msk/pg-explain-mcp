@@ -1,0 +1,30 @@
+[sqlfluff]
+dialect = postgres
+templater = raw
+max_line_length = 120
+
+# Отключаем шумные правила
+exclude_rules = LT01, LT02, LT05
+
+[sqlfluff:rules:layout.long_lines]
+ignore_comment_lines = True
+
+[sqlfluff:rules:layout.indent]
+indent_unit = space
+tab_space_size = 4
+
+[sqlfluff:rules:capitalisation.keywords]
+capitalisation_policy = lower
+
+[sqlfluff:rules:capitalisation.identifiers]
+capitalisation_policy = lower
+
+[sqlfluff:rules:capitalisation.functions]
+extended_capitalisation_policy = lower
+
+[sqlfluff:rules:capitalisation.literals]
+capitalisation_policy = lower
+
+[sqlfluff:rules:capitalisation.types]
+extended_capitalisation_policy = lower
+
