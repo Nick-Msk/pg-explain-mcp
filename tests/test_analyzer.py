@@ -123,16 +123,54 @@ class TestDiskSpillSortCheck:
         assert DiskSpillSortCheck().check(node) == []
 
     def test_external_sort_is_reported(self):
-        node = {"Node Type": "Sort", "Sort Method": "external merge Disk: 2048kB"}
+        node = {
+            "Node Type": "Sort",
+            "Sort Method": "external merge",
+            "Sort Space Type": "Disk",
+            "Sort Space Used": 221208,
+        }
         issues = DiskSpillSortCheck().check(node)
         assert len(issues) == 1
         assert issues[0].type == "disk_spill_sort"
+        assert "221208kB" in issues[0].message
+        assert "216.0 MB" in issues[0].message
+
+    def test_message_mentions_work_mem_formula(self):
+        node = {
+            "Node Type": "Sort",
+            "Sort Method": "external merge",
+            "Sort Space Type": "Disk",
+            "Sort Space Used": 221208,
+        }
+        issues = DiskSpillSortCheck().check(node)
+        msg = issues[0].message
+        assert "set work_mem to at least" in msg
+        assert "hash_mem_multiplier does not apply" in msg
+        assert "Current work_mem is not part of this calculation" in msg
+
+    def test_missing_fields_do_not_crash(self):
+        node = {"Node Type": "Sort", "Sort Method": "external merge"}
+        issues = DiskSpillSortCheck().check(node)
+        assert len(issues) == 1
 
     def test_key_order_is_stable(self):
         node = {"Node Type": "Seq Scan", "Relation Name": "t"}
         result = summarize_plan_node(node)
         keys = list(result[0].keys())
         assert keys[:2] == ["depth", "node_type"]
+    def test_message_contains_absolute_value(self):
+        node = {
+            "Node Type": "Sort",
+            "Sort Method": "external merge",
+            "Sort Space Type": "Disk",
+            "Sort Space Used": 221208,
+        }
+        issues = DiskSpillSortCheck().check(node)
+        msg = issues[0].message
+        assert "221208kB" in msg
+        assert "216.0 MB" in msg
+        assert "256 MB" in msg
+        assert "Current work_mem is not part of" in msg
 
 class TestDiskSpillHashCheck:
     def test_single_batch_is_ok(self):

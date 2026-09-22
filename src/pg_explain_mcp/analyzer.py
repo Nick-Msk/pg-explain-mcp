@@ -152,15 +152,13 @@ class EstimateMismatchCheck:
             )
         ]
 
-
 class DiskSpillSortCheck:
-    """Sort spilled to disk — work_mem is too small.
+    """Sort operation spilled to disk — work_mem is too small.
 
-    In the JSON plan, PostgreSQL splits the spill info across three
-    fields: ``Sort Method`` (e.g. ``external merge``), ``Sort Space Type``
-    (``Disk`` or ``Memory``) and ``Sort Space Used`` (kB). The check
-    reads all three and includes the size in the message, so the LLM
-    can recommend a realistic ``work_mem`` value.
+    The check produces a self-contained recommendation: it rounds the
+    spill size up to the next power-of-two MB value and states it
+    directly, so the caller does not have to subtract, divide, or look
+    up runtime parameters.
     """
 
     name = "disk_spill_sort"
@@ -173,23 +171,33 @@ class DiskSpillSortCheck:
         used = node.get("Sort Space Used", 0)
         space_type = node.get("Sort Space Type", "")
 
-        if used and space_type == "Disk":
-            size_mb = round(used / 1024, 1)
-            size_hint = (
-                f" ({used}kB ≈ {size_mb}MB written to disk — "
-                "set work_mem above this value or add an index to avoid the sort)"
-            )
-        elif used:
-            size_hint = f" ({used}kB used)"
-        else:
-            size_hint = ""
+        if not (used and space_type == "Disk"):
+            return [
+                Issue(
+                    severity=SEVERITY_WARNING,
+                    type=self.name,
+                    message="Sort spilled to disk. Increase work_mem.",
+                    node="Sort",
+                )
+            ]
+
+        size_mb = used / 1024
+        # round up to the next power of two: 32/64/128/256/512/1024 MB
+        target = 32
+        while target < size_mb * 1.1:
+            target *= 2
 
         return [
             Issue(
                 severity=SEVERITY_WARNING,
                 type=self.name,
                 message=(
-                    f"Sort spilled to disk{size_hint}. Increase work_mem or optimize the query."
+                    f"Sort spilled to disk ({used}kB ≈ {size_mb:.1f} MB). "
+                    f"Recommended fix: set work_mem to at least {size_mb:.0f} MB; "
+                    f"a safe round value is {target} MB. "
+                    "Note: sorts use work_mem directly — hash_mem_multiplier "
+                    "does not apply. Current work_mem is not part of this "
+                    "calculation."
                 ),
                 node="Sort",
             )

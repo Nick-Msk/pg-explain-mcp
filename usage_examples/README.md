@@ -121,7 +121,7 @@ call mcp_explain_tool.fill_disk_spill_sort(1000000);
 |---|---|
 | [Small sort stays in memory](pg_disk_spill_sort/sample_disk_spill_sort_on_norm.md) | `quicksort`, no warnings |
 | [Large sort spills to disk](pg_disk_spill_sort/sample_disk_spill_sort_on_spill.md) | `external merge`, `disk_spill_sort` fires with spill size |
-
+| [Large sort spills to disk (precise calc)](pg_disk_spill_sort/sample_disk_spill_sort_on_spill_adv.md) | Derived `work_mem` from current setting, arithmetic shown |
 ---
 
 ## DiskSpillHashCheck: before / after
@@ -141,5 +141,11 @@ call mcp_explain_tool.fill_disk_spill_hash(1000000);
 | [In-memory hash join](pg_disk_spill_hash/sample_disk_spill_hash_on_norm.md) | `hash_batches: 1`, no warnings |
 | [Hash join spills to disk](pg_disk_spill_hash/sample_disk_spill_hash_on_spill.md) | `hash_batches: 4`, `disk_spill_hash` fires with estimated full size |
 | [Hash join spills to disk (precise calc)](pg_disk_spill_hash/sample_disk_spill_hash_on_spill_adv.md) | Derived `work_mem` from `hash_mem_multiplier`, arithmetic shown |
+
+- **`calculate adjustments precisely`** — forces the model to call
+  `list_parameters` and show the arithmetic instead of recommending a
+  generic value. See the precise variants:
+  - [`disk_spill_hash`](pg_disk_spill_hash/sample_disk_spill_hash_on_spill_adv.md)
+  - [`disk_spill_sort`](pg_disk_spill_sort/sample_disk_spill_sort_on_spill_adv.md)
 
 

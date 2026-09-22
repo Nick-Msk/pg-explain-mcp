@@ -100,6 +100,11 @@ The hash table exceeded `work_mem` and was written to disk in batches.
    ```
    work_mem > estimated_full_size / hash_mem_multiplier
    ```
+    **Do not compute a "delta"** of the form
+   `estimated_full_size − current work_mem`. The estimated full size
+   is the total hash size, not an increment on top of the current
+   setting. Current `work_mem` is a starting point for comparison, not
+   part of the formula.
 
 4. Round up to a standard value (32 / 64 / 128 / 256 MB) and state
    the arithmetic **explicitly**. Example of an acceptable answer:
@@ -110,4 +115,45 @@ The hash table exceeded `work_mem` and was written to disk in batches.
 
    An answer that picks 256 MB without showing the arithmetic is
    **wrong**, even if the value itself is safe.
+
+### `disk_spill_sort` check
+
+The sort exceeded `work_mem` and was written to disk as an external
+merge sort.
+
+**Mandatory steps, in this order:**
+
+1. Read `issues[0].message`. It contains the spill size
+   (`Sort Space Used`).
+2. **Call the `pg-explain.list_parameters` tool.** Do **not** suggest
+   the user run SQL manually — the tool is the only correct path.
+   The current `work_mem` is needed as a starting point, and it is
+   not part of the plan.
+3. Compute the minimum required `work_mem`:
+
+   ```
+   work_mem ≥ spill size
+   ```
+
+   **Do not compute a "delta"** of the form
+   `spill size − current work_mem`. The spill size is the total data
+   volume to be sorted, not an increment on top of the current
+   setting. Current `work_mem` is a starting point for comparison,
+   not part of the formula.
+
+   **Also note:** `hash_mem_multiplier` does **not** apply to sorts.
+   It affects hash operations only. For sorts the effective memory
+   budget is exactly `work_mem`.
+4. Round up to a standard value (32 / 64 / 128 / 256 / 512 MB) and
+   state the arithmetic **explicitly**. Example of an acceptable
+   answer:
+
+   > Spill size is 216 MB. Current `work_mem` is 20 MB — a starting
+   > point, not part of the formula. The minimum required `work_mem`
+   > is 216 MB; I recommend `SET work_mem = '256MB'`.
+
+   An answer that picks 256 MB without showing the arithmetic is
+   **wrong**, even if the value itself is safe. An answer that
+   subtracts the current `work_mem` from the spill size is also
+   **wrong** — the spill size is an absolute threshold, not a delta.
 
