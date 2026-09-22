@@ -7,13 +7,123 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **MCP tools**
+  - `list_indexes` — returns existing indexes for a table (or all
+    tables), so the assistant can avoid recommending an index that
+    already exists.
+  - `list_parameters` — returns runtime parameters relevant to plan
+    analysis: `work_mem`, `hash_mem_multiplier`, `shared_buffers`,
+    `effective_cache_size`, `random_page_cost`, `seq_page_cost`,
+    parallel worker limits, `jit`.
+
+- **Fixture extension** `mcp_explain_tool`
+  - A PostgreSQL extension that ships empty tables and `fill_*` /
+    `clear_*` procedures for every `PlanCheck`.
+  - Adapters covered so far: `index_scan`, `seq_scan`,
+    `disk_spill_sort`, `disk_spill_hash`, `nested_loop`.
+  - `fill_all(totalcount)` / `clear_all()` aggregate procedures.
+  - `schema = mcp_explain_tool` declared in the control file, so
+    `CREATE EXTENSION mcp_explain_tool;` creates the schema
+    automatically.
+
+- **Usage examples** in `usage_examples/`
+  - `pg_index_scan_adapters/` — healthy vs. stale-visibility-map
+    scenarios.
+  - `pg_seq_scan_adapters/` — range query with and without an index.
+  - `pg_disk_spill_sort/` — in-memory sort vs. external merge sort,
+    including a *precise* variant that derives `work_mem` from the
+    reported spill size.
+  - `pg_disk_spill_hash/` — in-memory hash join vs. multi-batch spill,
+    including a *precise* variant that derives `work_mem` from
+    `hash_mem_multiplier`.
+  - `pg_nested_loop/` — 100-iteration vs. 5000-iteration Nested Loop.
+  - `usage_examples/README.md` — test environment, prompting tips,
+    per-check sections.
+
+- **Continue.dev configuration examples** in `config_example/`
+  - `postgres-agent.md` — system prompt for an assistant that knows
+    how to use `pg-explain` and a generic PostgreSQL MCP server.
+  - `mcpServers/pg-explain.yaml` — MCP server registration.
+
+- **Documentation**
+  - `DISCLAIMER.md` — read-only guarantees, LLM caveats, no liability.
+  - `CHANGELOG.md` — this file.
+  - README: test environment section, prompting tips, roadmap.
+
+### Changed
+
+- **`SeqScanCheck`** — refined to avoid false positives:
+  - requires a filter (`Rows Removed by Filter > 0`),
+  - requires ≥ 90 % of the read rows to be discarded by the filter,
+  - message is now neutral: it asks the caller to verify whether an
+    index already exists, rather than instructing to create one.
+
+- **`DiskSpillSortCheck`** — the message now contains a concrete,
+  ready-to-use `work_mem` value (rounded up from the reported spill
+  size) and explicitly states that `hash_mem_multiplier` does not
+  apply to sorts. This removed a persistent LLM misinterpretation
+  (see the design note in
+  `usage_examples/pg_disk_spill_sort/sample_disk_spill_sort_on_spill_adv.md`).
+
+- **`DiskSpillHashCheck`** — the message now reports:
+  - batch count,
+  - peak memory per batch,
+  - estimated full hash size (`peak × batches`),
+  - parallel worker count,
+  - disk usage when available.
+  It also states the correct formula
+  (`work_mem × hash_mem_multiplier > estimated full size`) and
+  points at `list_parameters`.
+
+- **`NestedLoopCheck`** — rewritten:
+  - reads the loop count from the **inner** child (`Plans[1]`), not
+    from the Nested Loop node itself (which always reports
+    `Actual Loops = 1`),
+  - emitted at `INFO` level, not `WARNING`,
+  - message is a future-looking note about linear growth, not a
+    fix-me instruction.
+
+- **`summarize_plan_node`** — refactored to use a `_PLAN_FIELDS`
+  mapping instead of a chain of `if` statements. New fields exposed
+  in `plan_nodes`:
+  - `actual_loops`
+  - `hash_buckets`, `hash_batches`, `peak_memory_usage_kb`
+  - `sort_space_type`, `sort_space_used_kb`
+  - `parallel_aware`
+  - `disk_usage_kb`
+
+- **`get_params`** in `db.py` — reads the curated set of parameters
+  from `pg_settings` rather than hard-coding values.
+
+### Fixed
+
+- `DiskSpillSortCheck` power-of-two rounding — `216 MB` spill now
+  recommends `256 MB` (previously `512 MB`).
+- `summarize_plan_node` no longer shadows `Sort Space Type` behind
+  the `Sort Method` key, which previously masked the `Disk` /
+  `Memory` distinction.
+- `fill_index_scan` — loop variable no longer shadows the
+  `generate_series` alias.
+
+### Notes
+
+- The analyzer enforces read-only access at the transaction level
+  (`SET TRANSACTION READ ONLY`).
+- `mcp` dependency is pinned to `<2.0.0` for SDK compatibility.
+- All fixture procedures declare `SET search_path = mcp_explain_tool,
+  pg_catalog`, so they work regardless of the caller's `search_path`.
+
 ## [0.1.0] — 2026-09-20
 
 ### Added
 
 - MCP server with three tools: `ping`, `list_tables`, `explain`.
-- Read-only PostgreSQL connection layer (`db.py`) with `SET TRANSACTION READ ONLY`.
-- Plan analyzer (`analyzer.py`) with a pluggable `PlanCheck` adapter registry.
+- Read-only PostgreSQL connection layer (`db.py`) with
+  `SET TRANSACTION READ ONLY`.
+- Plan analyzer (`analyzer.py`) with a pluggable `PlanCheck` adapter
+  registry.
 - Checks:
   - `SeqScanCheck` — sequential scans on large tables.
   - `EstimateMismatchCheck` — planner cardinality misestimates.
