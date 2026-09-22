@@ -279,6 +279,42 @@ end;
 $$;
 
 -- -----------------------------------------------------------------------------
+--  bitmap_heap_scan
+-- -----------------------------------------------------------------------------
+
+create table data_bitmap_heap_scan_norm (
+    id   bigserial primary key,
+    val  integer   not null,
+    pad  text
+);
+
+create index idx_data_bitmap_heap_scan_norm_val
+    on data_bitmap_heap_scan_norm (val);
+
+create procedure fill_bitmap_heap_scan(totalcount int)
+language plpgsql
+set search_path = mcp_explain_tool, pg_catalog
+as $$
+begin
+    insert into data_bitmap_heap_scan_norm (val, pad)
+    select (random() * 1_000_000)::int, repeat('x', 200)
+    from generate_series(1, totalcount) as n;
+
+    analyze data_bitmap_heap_scan_norm;
+end;
+$$;
+
+create procedure clear_bitmap_heap_scan()
+language plpgsql
+set search_path = mcp_explain_tool, pg_catalog
+as $$
+begin
+    truncate data_bitmap_heap_scan_norm
+        restart identity;
+end;
+$$;
+
+-- -----------------------------------------------------------------------------
 --  Aggregates (grow as adapters are added)
 -- -----------------------------------------------------------------------------
 
@@ -296,6 +332,7 @@ begin
     call fill_disk_spill_sort(totalcount);
     call fill_disk_spill_hash(totalcount);
     call fill_nested_loop(totalcount);
+    call fill_bitmap_heap_scan(totalcount);
 end;
 $$;
 
@@ -309,5 +346,7 @@ begin
     call clear_disk_spill_sort();
     call clear_disk_spill_hash();
     call clear_nested_loop();
+    call clear_bitmap_heap_scan();
 end;
 $$;
+

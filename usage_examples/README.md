@@ -149,3 +149,22 @@ call mcp_explain_tool.fill_disk_spill_hash(1000000);
   - [`disk_spill_sort`](pg_disk_spill_sort/sample_disk_spill_sort_on_spill_adv.md)
 
 
+---
+
+## BitmapHeapScanCheck: narrow / wide range
+
+Reproducible two-part scenario backed by a single table,
+`mcp_explain_tool.data_bitmap_heap_scan`. The check fires based on the
+selectivity of the query, not the state of the table.
+
+Prerequisites:
+
+```sql
+call mcp_explain_tool.fill_bitmap_heap_scan(5000000);
+```
+
+| Example | What it demonstrates |
+|---|---|
+| [Narrow range (25k rows)](pg_bitmap_heap_scan/sample_bitmap_heap_scan_small_range.md) | Below threshold, no `bitmap_heap_scan` warning — but the LLM still notices poor heap clustering |
+| [Wide range (200k rows)](pg_bitmap_heap_scan/sample_bitmap_heap_scan_large_range.md) | Above threshold, `bitmap_heap_scan` fires at `INFO` |
+

@@ -121,7 +121,7 @@ run the second command.
 | `disk_spill_sort`          | *(planned)*                                             |
 | `disk_spill_hash`          | *(planned)*                                             |
 | `nested_loop`              | *(planned)*                                             |
-| `bitmap_heap_scan`         | *(planned)*                                             |
+| `bitmap_heap_scan`         | `data_bitmap_heap_scan`                                |
 
 ## Adding a new adapter
 
