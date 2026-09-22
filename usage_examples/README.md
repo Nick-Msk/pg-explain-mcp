@@ -1,3 +1,7 @@
+# usage examples
+
+Real-world runs of `pg-explain-mcp` against PostgreSQL.
+
 ## test environment
 
 All examples in this directory were captured on the following setup.
@@ -5,16 +9,17 @@ Results may vary on different hardware, PostgreSQL versions, or
 configuration — especially numbers like execution time, spill size,
 and `shared_read_blocks`.
 
-| component        | value                                       |
-|------------------|---------------------------------------------|
-| machine          | MacBook Pro (Apple Silicon, arm64)          |
-| OS               | macOS 26.x (Tahoe)                          |
-| PostgreSQL       | 18.6 (built from source)                    |
-| `work_mem`       | 20 MB                                       |
-| `shared_buffers` | 128 MB                                      |
-| Python           | 3.12.14 (Homebrew)                          |
-| MCP client       | Continue.dev                                |
-| LLM              | `google/gemma-4-26b-a4b-qat` via LM Studio  |
+| component          | value                                       |
+|--------------------|---------------------------------------------|
+| machine            | MacBook Pro (Apple Silicon, arm64)          |
+| OS                 | macOS 26.x (Tahoe)                          |
+| PostgreSQL         | 18.6 (built from source)                    |
+| `work_mem`         | 20 MB                                       |
+| `shared_buffers`   | 128 MB                                      |
+| `random_page_cost` | 2 (configured for SSD; default is 4)        |
+| Python             | 3.12.14 (Homebrew)                          |
+| MCP client         | Continue.dev                                |
+| LLM                | `google/gemma-4-26b-a4b-qat` via LM Studio  |
 
 The two tables per adapter are sized so that:
 
@@ -28,10 +33,6 @@ specific issue the example is about — plus, occasionally, an
 unrelated `seq_scan` when the underlying scan reads more than
 1000 rows (see [pg_seq_scan_adapters/](pg_seq_scan_adapters/) for
 details).
-
-# usage examples
-
-Real-world runs of `pg-explain-mcp` against PostgreSQL.
 
 ## prerequisites
 
@@ -50,6 +51,18 @@ call mcp_explain_tool.fill_all(1000000);
 ```
 
 See [`../fixtures/README.md`](../fixtures/README.md) for details.
+
+## prompting tips
+
+Some examples produce better results with an explicit directive in the
+prompt:
+
+- **`calculate adjustments precisely`** — forces the model to call
+  `list_parameters` and show the arithmetic instead of recommending a
+  generic value. See
+  [disk_spill_hash (precise variant)](pg_disk_spill_hash/sample_disk_spill_hash_on_spill_adv.md).
+- **`show me the raw json output`** — makes the model quote the tool
+  output verbatim, useful for debugging.
 
 ---
 
@@ -109,6 +122,8 @@ call mcp_explain_tool.fill_disk_spill_sort(1000000);
 | [Small sort stays in memory](pg_disk_spill_sort/sample_disk_spill_sort_on_norm.md) | `quicksort`, no warnings |
 | [Large sort spills to disk](pg_disk_spill_sort/sample_disk_spill_sort_on_spill.md) | `external merge`, `disk_spill_sort` fires with spill size |
 
+---
+
 ## DiskSpillHashCheck: before / after
 
 Reproducible two-part scenario backed by
@@ -119,4 +134,12 @@ Prerequisites:
 
 ```sql
 call mcp_explain_tool.fill_disk_spill_hash(1000000);
+```
+
+| Example | What it demonstrates |
+|---|---|
+| [In-memory hash join](pg_disk_spill_hash/sample_disk_spill_hash_on_norm.md) | `hash_batches: 1`, no warnings |
+| [Hash join spills to disk](pg_disk_spill_hash/sample_disk_spill_hash_on_spill.md) | `hash_batches: 4`, `disk_spill_hash` fires with estimated full size |
+| [Hash join spills to disk (precise calc)](pg_disk_spill_hash/sample_disk_spill_hash_on_spill_adv.md) | Derived `work_mem` from `hash_mem_multiplier`, arithmetic shown |
+
 
