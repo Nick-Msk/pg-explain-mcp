@@ -223,6 +223,18 @@ Ready-to-use configuration files are available in [`examples/`](examples/):
 Pull requests are welcome. For major changes, please open an issue first
 to discuss what you would like to change.
 
+## Roadmap
+
+- **Configurable checks.** Move `PlanCheck` enable/disable flags and
+  thresholds into a small SQLite config database (or a YAML file).
+  This will let users turn off checks that do not apply to their
+  workload — for example, `nested_loop` reports at `INFO` level and
+  is useful on some setups but noise on others.
+- **Additional checks** — `estimate_mismatch` for stale statistics,
+  `partition_pruning` for partitioned tables.
+- **Multi-database support** — currently PostgreSQL-only; the
+  `PlanCheck` interface is database-agnostic in principle.
+
 ## License
 
 MIT — see [LICENSE](LICENSE) for details.

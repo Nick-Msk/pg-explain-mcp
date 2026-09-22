@@ -217,15 +217,40 @@ class TestDiskSpillHashCheck:
 
 class TestNestedLoopCheck:
     def test_few_loops_is_ok(self):
-        node = {"Node Type": "Nested Loop", "Actual Loops": 10}
+        node = {
+            "Node Type": "Nested Loop",
+            "Plans": [
+                {"Node Type": "Seq Scan", "Actual Loops": 1},
+                {"Node Type": "Index Scan", "Actual Loops": 10},
+            ],
+        }
         assert NestedLoopCheck().check(node) == []
 
     def test_many_loops_is_reported(self):
-        node = {"Node Type": "Nested Loop", "Actual Loops": 100_000}
+        node = {
+            "Node Type": "Nested Loop",
+            "Plans": [
+                {"Node Type": "Seq Scan", "Actual Loops": 1},
+                {
+                    "Node Type": "Index Scan",
+                    "Relation Name": "inner_table",
+                    "Actual Loops": 5000,
+                },
+            ],
+        }
         issues = NestedLoopCheck().check(node)
         assert len(issues) == 1
-        assert issues[0].severity == "info"
+        assert issues[0].type == "nested_loop"
+        assert "5000 times" in issues[0].message
+        assert "inner_table" in issues[0].message
 
+    def test_missing_inner_child_does_not_crash(self):
+        node = {"Node Type": "Nested Loop", "Plans": []}
+        assert NestedLoopCheck().check(node) == []
+
+    def test_other_node_type_is_ignored(self):
+        node = {"Node Type": "Hash Join", "Plans": [{"Actual Loops": 99999}]}
+        assert NestedLoopCheck().check(node) == []
 
 class TestBitmapHeapScanCheck:
     def test_small_bitmap_is_ok(self):

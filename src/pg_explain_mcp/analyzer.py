@@ -262,7 +262,20 @@ class DiskSpillHashCheck:
         ]
 
 class NestedLoopCheck:
-    """Nested Loop with too many iterations — consider a Hash Join."""
+    """Nested Loop with a high number of inner iterations.
+
+    PostgreSQL reports the loop count on the **inner** child
+    (``Plans[1]``), not on the Nested Loop node itself — the outer
+    node always reports ``Actual Loops = 1``.
+
+    A Nested Loop with an indexed inner side and ~1 row per lookup is
+    optimal for a small outer table; there is nothing to fix. The
+    check is emitted at ``INFO`` level as a heads-up for future
+    growth, not as a warning.
+
+    Related inefficiencies caused by misestimated cardinality are
+    reported separately by ``EstimateMismatchCheck``.
+    """
 
     name = "nested_loop"
     THRESHOLD_LOOPS = 1000
@@ -271,22 +284,33 @@ class NestedLoopCheck:
         if node.get("Node Type") != "Nested Loop":
             return []
 
-        loops = node.get("Actual Loops", 1)
+        plans = node.get("Plans", [])
+        if len(plans) < 2:
+            return []
+
+        inner = plans[1]
+        loops = inner.get("Actual Loops", 1)
         if loops <= self.THRESHOLD_LOOPS:
             return []
+
+        inner_type = inner.get("Node Type", "?")
+        inner_relation = inner.get("Relation Name", "?")
+        inner_avg = inner.get("Actual Rows", 0)
 
         return [
             Issue(
                 severity=SEVERITY_INFO,
                 type=self.name,
                 message=(
-                    f"Nested Loop executed {loops} times. "
-                    "Check whether a Hash Join would be more efficient."
+                    f"Nested Loop ran the inner side {loops} times "
+                    f"('{inner_type}' on '{inner_relation}', ~{inner_avg:.2f} "
+                    "rows per loop). This is optimal for the current data, "
+                    "but execution time grows linearly with the outer row "
+                    "count — re-check if the outer side becomes much larger."
                 ),
                 node="Nested Loop",
             )
         ]
-
 
 class BitmapHeapScanCheck:
     """Bitmap Heap Scan on a large table — check bitmap efficiency.

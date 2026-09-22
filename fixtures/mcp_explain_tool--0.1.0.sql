@@ -221,6 +221,64 @@ end;
 $$;
 
 -- -----------------------------------------------------------------------------
+--  nested_loop
+-- -----------------------------------------------------------------------------
+
+create table data_nested_loop_norm (
+    id   bigserial primary key,
+    val  integer   not null
+);
+
+create table data_nested_loop_many (
+    id   bigserial primary key,
+    val  integer   not null
+);
+
+create table data_nested_loop_inner (
+    id   bigserial primary key,
+    val  integer   not null,
+    pad  text
+);
+
+create index idx_data_nested_loop_inner_val on data_nested_loop_inner (val);
+
+create procedure fill_nested_loop(totalcount int)
+language plpgsql
+set search_path = mcp_explain_tool, pg_catalog
+as $$
+begin
+    -- outer, small: 100 rows → ~100 loop iterations
+    insert into data_nested_loop_norm (val)
+    select (random() * 1_000_000)::int
+    from generate_series(1, 100) as n;
+
+    -- outer, larger: 5000 rows → ~5000 loop iterations
+    insert into data_nested_loop_many (val)
+    select (random() * 1_000_000)::int
+    from generate_series(1, 5000) as n;
+
+    -- inner, indexed on val
+    insert into data_nested_loop_inner (val, pad)
+    select (random() * 1_000_000)::int, repeat('x', 200)
+    from generate_series(1, totalcount) as n;
+
+    analyze data_nested_loop_norm;
+    analyze data_nested_loop_many;
+    analyze data_nested_loop_inner;
+end;
+$$;
+
+create procedure clear_nested_loop()
+language plpgsql
+set search_path = mcp_explain_tool, pg_catalog
+as $$
+begin
+    truncate data_nested_loop_norm, data_nested_loop_many, data_nested_loop_inner
+        restart identity;
+end;
+$$;
+
+-- -----------------------------------------------------------------------------
 --  Aggregates (grow as adapters are added)
 -- -----------------------------------------------------------------------------
 
@@ -237,6 +295,7 @@ begin
     call fill_index_scan(totalcount);
     call fill_disk_spill_sort(totalcount);
     call fill_disk_spill_hash(totalcount);
+    call fill_nested_loop(totalcount);
 end;
 $$;
 
@@ -249,5 +308,6 @@ begin
     call clear_index_scan();
     call clear_disk_spill_sort();
     call clear_disk_spill_hash();
+    call clear_nested_loop();
 end;
 $$;
