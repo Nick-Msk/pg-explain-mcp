@@ -12,7 +12,7 @@ from pg_explain_mcp.analyzer import (
     analyze_plan,
     summarize_plan_node,
 )
-from pg_explain_mcp.server import _format_indexes
+from pg_explain_mcp.server import _format_indexes, _format_params
 
 # ---------------------------------------------------------------------------
 # Individual checks
@@ -27,27 +27,14 @@ class TestSeqScanCheck:
     def test_large_table_is_reported(self):
         node = {
             "Node Type": "Seq Scan",
-            "Actual Rows": 5000,
             "Relation Name": "t",
-        }
-        issues = SeqScanCheck().check(node)
-        assert len(issues) == 1
-        assert issues[0].type == "seq_scan"
-        assert "5000 rows" in issues[0].message
-
-    def test_many_rows_filtered_out_is_reported(self):
-        """Seq Scan read 1M rows but returned only 100 — still a problem."""
-        node = {
-            "Node Type": "Seq Scan",
-            "Relation Name": "big",
             "Actual Rows": 100,
-            "Rows Removed by Filter": 999_900,
+            "Rows Removed by Filter": 9900,
         }
         issues = SeqScanCheck().check(node)
         assert len(issues) == 1
         assert issues[0].type == "seq_scan"
-        assert "1000000 rows" in issues[0].message
-        assert "filtered out" in issues[0].message
+        assert "10000 rows" in issues[0].message
 
     def test_boundary_value_is_ok(self):
         node = {
@@ -62,6 +49,46 @@ class TestSeqScanCheck:
         node = {"Node Type": "Index Scan", "Actual Rows": 999999}
         assert SeqScanCheck().check(node) == []
 
+    def test_message_is_neutral(self):
+        node = {
+            "Node Type": "Seq Scan",
+            "Relation Name": "big",
+            "Actual Rows": 100,
+            "Rows Removed by Filter": 999_900,
+        }
+        issues = SeqScanCheck().check(node)
+        assert "Verify whether an index" in issues[0].message
+        assert "if it does, investigate" in issues[0].message.lower()
+
+    def test_moderate_selectivity_is_ok(self):
+        """Filter discards ~50 % — not enough to justify an index."""
+        node = {
+            "Node Type": "Seq Scan",
+            "Relation Name": "t",
+            "Actual Rows": 5000,
+            "Rows Removed by Filter": 5000,
+        }
+        assert SeqScanCheck().check(node) == []
+
+    def test_no_filter_is_ok(self):
+        """Self-join or full scan — index won't help."""
+        node = {
+            "Node Type": "Seq Scan",
+            "Relation Name": "t",
+            "Actual Rows": 1_000_000,
+        }
+        assert SeqScanCheck().check(node) == []
+
+    def test_high_selectivity_filter_is_reported(self):
+        node = {
+            "Node Type": "Seq Scan",
+            "Relation Name": "big",
+            "Actual Rows": 100,
+            "Rows Removed by Filter": 999_900,
+        }
+        issues = SeqScanCheck().check(node)
+        assert len(issues) == 1
+        assert "Verify whether an index" in issues[0].message
 
 class TestEstimateMismatchCheck:
     def test_close_estimate_is_ok(self):
@@ -107,16 +134,48 @@ class TestDiskSpillSortCheck:
         keys = list(result[0].keys())
         assert keys[:2] == ["depth", "node_type"]
 
-
 class TestDiskSpillHashCheck:
     def test_single_batch_is_ok(self):
         assert DiskSpillHashCheck().check({"Hash Batches": 1}) == []
 
     def test_multiple_batches_is_reported(self):
-        issues = DiskSpillHashCheck().check({"Node Type": "Hash", "Hash Batches": 8})
+        node = {
+            "Node Type": "Hash",
+            "Hash Batches": 8,
+            "Peak Memory Usage": 20000,
+        }
+        issues = DiskSpillHashCheck().check(node)
         assert len(issues) == 1
-        assert issues[0].type == "disk_spill_hash"
+        assert "8 batches" in issues[0].message
+        assert "estimated full size" in issues[0].message
 
+    def test_message_mentions_multiplier_formula(self):
+        node = {"Hash Batches": 4, "Peak Memory Usage": 37536}
+        issues = DiskSpillHashCheck().check(node)
+        assert "hash_mem_multiplier" in issues[0].message
+        assert "list_parameters" in issues[0].message
+
+    def test_parallel_hash_is_annotated(self):
+        node = {
+            "Node Type": "Hash",
+            "Hash Batches": 4,
+            "Peak Memory Usage": 37536,
+            "Disk Usage": 10720,
+            "Parallel Aware": True,
+            "Actual Loops": 3,
+        }
+        issues = DiskSpillHashCheck().check(node)
+        msg = issues[0].message
+        assert "3 workers" in msg
+        assert "37536kB per batch" in msg
+        assert "146.6 MB" in msg
+        assert "disk 10720kB" in msg
+
+    def test_missing_fields_do_not_crash(self):
+        node = {"Hash Batches": 4}
+        issues = DiskSpillHashCheck().check(node)
+        assert len(issues) == 1
+        assert "4 batches" in issues[0].message
 
 class TestNestedLoopCheck:
     def test_few_loops_is_ok(self):
@@ -280,6 +339,32 @@ class TestSummarizePlanNode:
         assert "index" not in result[0]
         assert "heap_fetches" not in result[0]
 
+class TestFormatParams:
+    def test_empty_list(self):
+        assert _format_params([]) == "No parameters found."
+
+    def test_with_unit(self):
+        rows = [{
+            "name": "work_mem",
+            "setting": "20480",
+            "unit": "kB",
+            "source": "default",
+            "short_desc": "Sets the maximum memory to be used for query workspaces.",
+        }]
+        result = _format_params(rows)
+        assert "work_mem = 20480 kB (default)" in result
+
+    def test_without_unit(self):
+        rows = [{
+            "name": "hash_mem_multiplier",
+            "setting": "2",
+            "unit": None,
+            "source": "default",
+            "short_desc": "Multiple of work_mem to use for hash tables.",
+        }]
+        result = _format_params(rows)
+        assert "hash_mem_multiplier = 2 (default)" in result
+
 
 # ---------------------------------------------------------------------------
 # analyze_plan — end-to-end
@@ -311,7 +396,8 @@ class TestAnalyzePlan:
                 "Plan": {
                     "Node Type": "Seq Scan",
                     "Relation Name": "orders",
-                    "Actual Rows": 5000,
+                    "Actual Rows": 100,
+                    "Rows Removed by Filter": 9900,
                     "Plans": [],
                 },
                 "Execution Time": 42.0,
@@ -328,8 +414,18 @@ class TestAnalyzePlan:
                 "Plan": {
                     "Node Type": "Hash Join",
                     "Plans": [
-                        {"Node Type": "Seq Scan", "Actual Rows": 9000, "Relation Name": "a"},
-                        {"Node Type": "Seq Scan", "Actual Rows": 8000, "Relation Name": "b"},
+                        {
+                            "Node Type": "Seq Scan",
+                            "Relation Name": "a",
+                            "Actual Rows": 100,
+                            "Rows Removed by Filter": 9900,
+                        },
+                        {
+                            "Node Type": "Seq Scan",
+                            "Relation Name": "b",
+                            "Actual Rows": 100,
+                            "Rows Removed by Filter": 9900,
+                        },
                     ],
                 },
                 "Execution Time": 10.0,

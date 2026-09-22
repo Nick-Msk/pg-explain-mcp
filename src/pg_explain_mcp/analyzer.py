@@ -46,19 +46,31 @@ class PlanCheck(Protocol):
 # Checks (adapters)
 # ---------------------------------------------------------------------------
 
-
 class SeqScanCheck:
-    """Sequential scan that reads a large number of rows.
+    """Sequential scan that discards most of what it reads.
 
-    A Seq Scan on a small table is fine. A Seq Scan that touches
-    thousands or millions of rows — even if the query returns only a
-    handful — usually indicates a missing index or a non-selective
-    query. The check therefore looks at the total number of rows the
-    node *read* (returned + filtered out), not just the rows it emitted.
+    A Seq Scan is not a problem by itself. It becomes one when the
+    planner reads many rows only to throw most of them away — usually
+    a sign that an index on the filter column might help.
+
+    The check therefore ignores:
+
+    - small scans (below ``THRESHOLD_ROWS``);
+    - scans with **no** filter (``Rows Removed by Filter`` is 0) —
+      reading the whole table is the only reasonable strategy here,
+      and an index would not change the plan;
+    - scans where the filter rejects less than ``MIN_FILTER_RATIO`` of
+      the rows read — an index rarely beats a Seq Scan at moderate
+      selectivity.
+
+    The message is intentionally neutral: it points the reader (or the
+    LLM) at the filter column and asks them to verify whether an index
+    already exists, rather than blindly recommending one.
     """
 
     name = "seq_scan"
     THRESHOLD_ROWS = 1000
+    MIN_FILTER_RATIO = 0.9   # 90 % of read rows must be discarded
 
     def check(self, node: dict[str, Any]) -> list[Issue]:
         if node.get("Node Type") != "Seq Scan":
@@ -71,28 +83,30 @@ class SeqScanCheck:
         if total_read <= self.THRESHOLD_ROWS:
             return []
 
-        relation = node.get("Relation Name", "?")
-        if removed > actual:
-            message = (
-                f"Sequential scan on '{relation}' read {total_read} rows "
-                f"({actual} returned, {removed} filtered out). "
-                "Consider adding an index on the filter column."
-            )
-        else:
-            message = (
-                f"Sequential scan on '{relation}' processed {total_read} rows. "
-                "Consider adding an index."
-            )
+        if removed == 0:
+            return []
 
+        if removed / total_read < self.MIN_FILTER_RATIO:
+            return []
+
+        relation = node.get("Relation Name", "?")
         return [
             Issue(
                 severity=SEVERITY_WARNING,
                 type=self.name,
-                message=message,
+                message=(
+                    f"Sequential scan on '{relation}' read {total_read} rows "
+                    f"({actual} returned, {removed} filtered out, "
+                    f"{removed / total_read * 100:.1f}% discarded). "
+                    "Verify whether an index on the filter column exists; "
+                    "if it does, investigate why the planner ignored it "
+                    "(stale statistics, low correlation, or high "
+                    "random_page_cost). If no index exists, consider "
+                    "adding one."
+                ),
                 node="Seq Scan",
             )
         ]
-
 
 class EstimateMismatchCheck:
     """Large mismatch between planner estimate and actual row counts.
@@ -181,9 +195,26 @@ class DiskSpillSortCheck:
             )
         ]
 
-
 class DiskSpillHashCheck:
-    """Hash Join used multiple batches — work_mem is too small."""
+    """Hash operation spilled to disk — work_mem is too small.
+
+    When the hash table no longer fits in ``work_mem``, PostgreSQL
+    partitions it into multiple batches and writes the excess to
+    temporary files on disk.
+
+    Two fields matter when interpreting the message:
+
+    - ``Peak Memory Usage`` — memory used by **one** batch, not the
+      whole hash table. When spilling, the real size is roughly
+      ``peak_memory × batches``.
+    - ``Disk Usage`` — actual bytes written to temporary files, when
+      PostgreSQL reports them.
+
+    The recommendation formula is intentionally spelled out in the
+    message: PostgreSQL allocates ``work_mem × hash_mem_multiplier``
+    to hash operations, and the multiplier is not visible in the plan.
+    The caller is expected to look it up via ``list_parameters``.
+    """
 
     name = "disk_spill_hash"
 
@@ -192,16 +223,35 @@ class DiskSpillHashCheck:
         if batches <= 1:
             return []
 
-        node_type = node.get("Node Type", "")
+        memory = node.get("Peak Memory Usage", 0)
+        disk = node.get("Disk Usage", 0)
+        parallel = node.get("Parallel Aware", False)
+        loops = node.get("Actual Loops", 1)
+
+        parts = [f"{batches} batches"]
+        if memory:
+            estimated_mb = round(memory * batches / 1024, 1)
+            parts.append(f"peak {memory}kB per batch")
+            parts.append(f"estimated full size ≈ {estimated_mb} MB")
+        if disk:
+            parts.append(f"disk {disk}kB")
+
+        details = ", ".join(parts)
+        parallel_note = f" (per worker, {loops} workers)" if parallel and loops > 1 else ""
+
         return [
             Issue(
                 severity=SEVERITY_WARNING,
                 type=self.name,
-                message=(f"Hash Join used multiple batches ({batches}). Increase work_mem."),
-                node=node_type,
+                message=(
+                    f"Hash operation spilled to disk{parallel_note}: {details}. "
+                    "To keep the hash table in memory, set work_mem such that "
+                    "work_mem × hash_mem_multiplier > estimated full size. "
+                    "Call list_parameters for the current hash_mem_multiplier."
+                ),
+                node=node.get("Node Type", "Hash"),
             )
         ]
-
 
 class NestedLoopCheck:
     """Nested Loop with too many iterations — consider a Hash Join."""
@@ -439,19 +489,23 @@ def _make_summary(issues: list[Issue], exec_time: float) -> str:
 # Mapping: EXPLAIN JSON field → key in our compact output.
 # Order matters only for readability; lookup is by key.
 _PLAN_FIELDS: dict[str, str] = {
-    "Relation Name": "relation",
-    "Index Name": "index",
-    "Actual Rows": "actual_rows",
-    "Plan Rows": "plan_rows",
+    "Relation Name":          "relation",
+    "Index Name":             "index",
+    "Actual Rows":            "actual_rows",
+    "Actual Loops":           "actual_loops",
+    "Plan Rows":              "plan_rows",
     "Rows Removed by Filter": "rows_removed_by_filter",
-    "Heap Fetches": "heap_fetches",
-    "Shared Read Blocks": "shared_read_blocks",
-    "Sort Method": "sort_method",
-    "Sort Space Type": "sort_space_type",
-    "Sort Space Used": "sort_space_used_kb",
-    "Hash Batches": "hash_batches",
+    "Heap Fetches":           "heap_fetches",
+    "Shared Read Blocks":     "shared_read_blocks",
+    "Sort Method":            "sort_method",
+    "Sort Space Type":        "sort_space_type",
+    "Sort Space Used":        "sort_space_used_kb",
+    "Hash Buckets":           "hash_buckets",
+    "Hash Batches":           "hash_batches",
+    "Peak Memory Usage":      "peak_memory_usage_kb",
+    "Disk Usage":             "disk_usage_kb",
+    "Parallel Aware":         "parallel_aware",
 }
-
 
 def summarize_plan_node(node: dict[str, Any], depth: int = 0) -> list[dict[str, Any]]:
     """Flatten a plan tree into a compact list of nodes.

@@ -118,3 +118,43 @@ def get_indexes(table_name: str | None = None) -> list[dict[str, Any]]:
         with conn.cursor() as cur:
             cur.execute(query, {"table_name": table_name})
             return cur.fetchall()
+
+# Parameters that are relevant when interpreting an execution plan.
+# Users can request additional names by passing an explicit list.
+ANALYSIS_PARAMS: tuple[str, ...] = (
+    "work_mem",
+    "hash_mem_multiplier",
+    "shared_buffers",
+    "effective_cache_size",
+    "random_page_cost",
+    "seq_page_cost",
+    "max_parallel_workers_per_gather",
+    "max_parallel_workers",
+    "jit",
+)
+
+
+def get_params(names: tuple[str, ...] | None = None) -> list[dict[str, Any]]:
+    """Return PostgreSQL runtime parameters relevant to plan analysis.
+
+    Args:
+        names: Parameter names to fetch. If None, uses ``ANALYSIS_PARAMS``.
+
+    Returns:
+        One dict per parameter with keys: ``name``, ``setting``, ``unit``,
+        ``source``, ``short_desc``.
+    """
+    if names is None:
+        names = ANALYSIS_PARAMS
+
+    query = """
+        select name, setting, unit, source, short_desc
+        from pg_settings
+        where name = any(%(names)s)
+        order by name
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, {"names": list(names)})
+            return cur.fetchall()
+

@@ -109,3 +109,14 @@ call mcp_explain_tool.fill_disk_spill_sort(1000000);
 | [Small sort stays in memory](pg_disk_spill_sort/sample_disk_spill_sort_on_norm.md) | `quicksort`, no warnings |
 | [Large sort spills to disk](pg_disk_spill_sort/sample_disk_spill_sort_on_spill.md) | `external merge`, `disk_spill_sort` fires with spill size |
 
+## DiskSpillHashCheck: before / after
+
+Reproducible two-part scenario backed by
+`mcp_explain_tool.data_disk_spill_hash_norm` and
+`mcp_explain_tool.data_disk_spill_hash_spill`.
+
+Prerequisites:
+
+```sql
+call mcp_explain_tool.fill_disk_spill_hash(1000000);
+

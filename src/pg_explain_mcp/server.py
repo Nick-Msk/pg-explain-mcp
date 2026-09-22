@@ -5,7 +5,7 @@ import json
 from mcp.server.fastmcp import FastMCP
 
 from pg_explain_mcp.analyzer import analyze_plan, summarize_plan_node
-from pg_explain_mcp.db import explain_query, get_indexes, get_schema
+from pg_explain_mcp.db import explain_query, get_indexes, get_params, get_schema
 
 mcp = FastMCP("pg-explain")
 
@@ -59,6 +59,36 @@ def list_indexes(table_name: str | None = None) -> str:
     rows = get_indexes(table_name)
     return _format_indexes(rows)
 
+def _format_params(rows: list[dict[str, any]]) -> str:
+    """Format parameter rows into a human-readable string."""
+    if not rows:
+        return "No parameters found."
+
+    lines = []
+    for row in rows:
+        unit = row.get("unit") or ""
+        setting = row["setting"]
+        value = f"{setting} {unit}".strip() if unit else setting
+        lines.append(f"{row['name']} = {value} ({row['source']})")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def list_parameters(names: str | None = None) -> str:
+    """Return PostgreSQL parameters relevant to plan analysis.
+
+    Args:
+        names: Optional comma-separated list of parameter names. If omitted,
+            returns a curated set: work_mem, hash_mem_multiplier,
+            shared_buffers, effective_cache_size, random_page_cost,
+            seq_page_cost, and parallel worker limits.
+    """
+    if names:
+        parsed = tuple(n.strip() for n in names.split(",") if n.strip())
+    else:
+        parsed = None
+    rows = get_params(parsed)
+    return _format_params(rows)
 
 @mcp.tool()
 def explain(sql: str) -> str:
