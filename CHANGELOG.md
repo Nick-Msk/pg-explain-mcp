@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-09-23
+
 ### Added
 
 - **MCP tools**
@@ -21,36 +23,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Fixture extension** `mcp_explain_tool`
   - A PostgreSQL extension that ships empty tables and `fill_*` /
     `clear_*` procedures for every `PlanCheck`.
-  - Adapters covered so far: `index_scan`, `seq_scan`,
-    `disk_spill_sort`, `disk_spill_hash`, `nested_loop`.
-  - `fill_all(totalcount)` / `clear_all()` aggregate procedures.
   - `schema = mcp_explain_tool` declared in the control file, so
-    `CREATE EXTENSION mcp_explain_tool;` creates the schema
+    `create extension mcp_explain_tool;` creates the schema
     automatically.
+  - `fill_all(totalcount)` / `clear_all()` aggregate procedures.
+  - All seven adapters covered: `index_scan`, `seq_scan`,
+    `disk_spill_sort`, `disk_spill_hash`, `nested_loop`,
+    `bitmap_heap_scan`, `estimate_mismatch`.
+  - `data_estimate_mismatch_skewed` uses
+    `pg_restore_attribute_stats()` to fabricate statistics, with
+    autovacuum disabled so the fake values survive.
 
-- **Usage examples** in `usage_examples/`
-  - `pg_index_scan_adapters/` — healthy vs. stale-visibility-map
-    scenarios.
-  - `pg_seq_scan_adapters/` — range query with and without an index.
-  - `pg_disk_spill_sort/` — in-memory sort vs. external merge sort,
-    including a *precise* variant that derives `work_mem` from the
-    reported spill size.
-  - `pg_disk_spill_hash/` — in-memory hash join vs. multi-batch spill,
-    including a *precise* variant that derives `work_mem` from
-    `hash_mem_multiplier`.
-  - `pg_nested_loop/` — 100-iteration vs. 5000-iteration Nested Loop.
+- **Usage examples** in `usage_examples/` — every adapter now has a
+  reproducible set of `.md` files with real tool output:
+  - `pg_index_scan_adapters/` — healthy vs. stale visibility map.
+  - `pg_seq_scan_adapters/` — with and without an index.
+  - `pg_disk_spill_sort/` — in-memory vs. external merge sort, plus a
+    *precise* variant with derived `work_mem`.
+  - `pg_disk_spill_hash/` — single-batch vs. multi-batch spill, plus
+    a *precise* variant with derived `work_mem`.
+  - `pg_nested_loop/` — 100 vs. 5000 inner iterations.
+  - `pg_bitmap_heap_scan/` — narrow vs. wide range on the same table.
+  - `pg_estimate_mismatch/` — norm, norm+index, skewed, and
+    skewed-other-value.
   - `usage_examples/README.md` — test environment, prompting tips,
-    per-check sections.
+    and per-check sections.
 
 - **Continue.dev configuration examples** in `config_example/`
   - `postgres-agent.md` — system prompt for an assistant that knows
-    how to use `pg-explain` and a generic PostgreSQL MCP server.
-  - `mcpServers/pg-explain.yaml` — MCP server registration.
+    how to use `pg-explain` and a generic PostgreSQL MCP server,
+    including per-check guidance for `seq_scan`, `disk_spill_sort`,
+    and `disk_spill_hash`.
+  - `mcpServers/pg-explain.yaml` — MCP server registration with
+    placeholder credentials.
 
 - **Documentation**
-  - `DISCLAIMER.md` — read-only guarantees, LLM caveats, no liability.
+  - `DISCLAIMER.md` — read-only guarantees, LLM caveats, no
+    liability, credentials policy.
+  - `fixtures/README.md` — install, populate, VACUUM policy,
+    autovacuum exceptions, static analysis.
   - `CHANGELOG.md` — this file.
-  - README: test environment section, prompting tips, roadmap.
 
 ### Changed
 
@@ -99,7 +111,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- `DiskSpillSortCheck` power-of-two rounding — `216 MB` spill now
+- `DiskSpillSortCheck` power-of-two rounding — a 216 MB spill now
   recommends `256 MB` (previously `512 MB`).
 - `summarize_plan_node` no longer shadows `Sort Space Type` behind
   the `Sort Method` key, which previously masked the `Disk` /
@@ -112,8 +124,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The analyzer enforces read-only access at the transaction level
   (`SET TRANSACTION READ ONLY`).
 - `mcp` dependency is pinned to `<2.0.0` for SDK compatibility.
-- All fixture procedures declare `SET search_path = mcp_explain_tool,
-  pg_catalog`, so they work regardless of the caller's `search_path`.
+- All fixture procedures declare
+  `SET search_path = mcp_explain_tool, pg_catalog`, so they work
+  regardless of the caller's `search_path`.
 
 ## [0.1.0] — 2026-09-20
 
@@ -147,6 +160,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The analyzer enforces read-only access at the transaction level.
 - `mcp` dependency is pinned to `<2.0.0` for SDK compatibility.
 
-[Unreleased]: https://github.com/Nick-Msk/pg-explain-mcp/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Nick-Msk/pg-explain-mcp/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Nick-Msk/pg-explain-mcp/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Nick-Msk/pg-explain-mcp/releases/tag/v0.1.0
 
