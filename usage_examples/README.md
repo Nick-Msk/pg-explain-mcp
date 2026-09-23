@@ -59,8 +59,9 @@ prompt:
 
 - **`calculate adjustments precisely`** — forces the model to call
   `list_parameters` and show the arithmetic instead of recommending a
-  generic value. See
-  [disk_spill_hash (precise variant)](pg_disk_spill_hash/sample_disk_spill_hash_on_spill_adv.md).
+  generic value. See the precise variants:
+  - [disk_spill_hash](pg_disk_spill_hash/sample_disk_spill_hash_on_spill_adv.md)
+  - [disk_spill_sort](pg_disk_spill_sort/sample_disk_spill_sort_on_spill_adv.md)
 - **`show me the raw json output`** — makes the model quote the tool
   output verbatim, useful for debugging.
 
@@ -121,7 +122,8 @@ call mcp_explain_tool.fill_disk_spill_sort(1000000);
 |---|---|
 | [Small sort stays in memory](pg_disk_spill_sort/sample_disk_spill_sort_on_norm.md) | `quicksort`, no warnings |
 | [Large sort spills to disk](pg_disk_spill_sort/sample_disk_spill_sort_on_spill.md) | `external merge`, `disk_spill_sort` fires with spill size |
-| [Large sort spills to disk (precise calc)](pg_disk_spill_sort/sample_disk_spill_sort_on_spill_adv.md) | Derived `work_mem` from current setting, arithmetic shown |
+| [Large sort, precise calc](pg_disk_spill_sort/sample_disk_spill_sort_on_spill_adv.md) | Derived `work_mem` from spill size, arithmetic shown |
+
 ---
 
 ## DiskSpillHashCheck: before / after
@@ -140,14 +142,27 @@ call mcp_explain_tool.fill_disk_spill_hash(1000000);
 |---|---|
 | [In-memory hash join](pg_disk_spill_hash/sample_disk_spill_hash_on_norm.md) | `hash_batches: 1`, no warnings |
 | [Hash join spills to disk](pg_disk_spill_hash/sample_disk_spill_hash_on_spill.md) | `hash_batches: 4`, `disk_spill_hash` fires with estimated full size |
-| [Hash join spills to disk (precise calc)](pg_disk_spill_hash/sample_disk_spill_hash_on_spill_adv.md) | Derived `work_mem` from `hash_mem_multiplier`, arithmetic shown |
+| [Hash join spills, precise calc](pg_disk_spill_hash/sample_disk_spill_hash_on_spill_adv.md) | Derived `work_mem` from `hash_mem_multiplier`, arithmetic shown |
 
-- **`calculate adjustments precisely`** — forces the model to call
-  `list_parameters` and show the arithmetic instead of recommending a
-  generic value. See the precise variants:
-  - [`disk_spill_hash`](pg_disk_spill_hash/sample_disk_spill_hash_on_spill_adv.md)
-  - [`disk_spill_sort`](pg_disk_spill_sort/sample_disk_spill_sort_on_spill_adv.md)
+---
 
+## NestedLoopCheck: small / large outer
+
+Reproducible two-part scenario backed by
+`mcp_explain_tool.data_nested_loop_norm`,
+`mcp_explain_tool.data_nested_loop_many`, and
+`mcp_explain_tool.data_nested_loop_inner`.
+
+Prerequisites:
+
+```sql
+call mcp_explain_tool.fill_nested_loop(1000000);
+```
+
+| Example | What it demonstrates |
+|---|---|
+| [Nested Loop, 100 outer rows](pg_nested_loop/sample_nested_loop_on_norm.md) | `actual_loops: 100`, no warnings |
+| [Nested Loop, 5000 outer rows](pg_nested_loop/sample_nested_loop_on_many.md) | `actual_loops: 5000`, `INFO` note about linear growth |
 
 ---
 
@@ -167,4 +182,29 @@ call mcp_explain_tool.fill_bitmap_heap_scan(5000000);
 |---|---|
 | [Narrow range (25k rows)](pg_bitmap_heap_scan/sample_bitmap_heap_scan_small_range.md) | Below threshold, no `bitmap_heap_scan` warning — but the LLM still notices poor heap clustering |
 | [Wide range (200k rows)](pg_bitmap_heap_scan/sample_bitmap_heap_scan_large_range.md) | Above threshold, `bitmap_heap_scan` fires at `INFO` |
+
+---
+
+## EstimateMismatchCheck: four scenarios
+
+Reproducible scenarios backed by
+`mcp_explain_tool.data_estimate_mismatch_norm` and
+`mcp_explain_tool.data_estimate_mismatch_skewed`.
+
+Prerequisites:
+
+```sql
+call mcp_explain_tool.fill_estimate_mismatch(1000000);
+```
+
+| Example | What it demonstrates |
+|---|---|
+| [Norm — no index](pg_estimate_mismatch/sample_estimate_mismatch_on_norm.md) | Honest stats, but `seq_scan` fires (99% discarded) |
+| [Norm + index — clean baseline](pg_estimate_mismatch/sample_estimate_mismatch_on_norm_indexed.md) | Honest stats + index → no issues at all |
+| [Skewed — fake stats for `val = 42`](pg_estimate_mismatch/sample_estimate_mismatch_on_skewed.md) | Ratio ~94.5x, `estimate_mismatch` and `seq_scan` fire together |
+| [Skewed — different value `val = 43`](pg_estimate_mismatch/sample_estimate_mismatch_on_skewed_other_value.md) | Ratio ~1.02x, `estimate_mismatch` stays silent |
+
+The skewed fixture uses `pg_restore_attribute_stats()` to overwrite
+statistics for a single value, and disables autovacuum on the table so
+the fake stats survive.
 

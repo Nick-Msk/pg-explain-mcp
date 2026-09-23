@@ -315,6 +315,77 @@ end;
 $$;
 
 -- -----------------------------------------------------------------------------
+--  estimate_mismatch
+-- -----------------------------------------------------------------------------
+
+create table data_estimate_mismatch_norm (
+    id   bigserial primary key,
+    val  integer   not null,
+    pad  text
+);
+
+create table data_estimate_mismatch_skewed (
+    id   bigserial primary key,
+    val  integer   not null,
+    pad  text
+);
+
+create procedure fill_estimate_mismatch(totalcount int)
+language plpgsql
+set search_path = mcp_explain_tool, pg_catalog
+as $$
+declare
+    skew_freq real;
+    skew_rows integer;
+begin
+    -- norm: uniform distribution, statistics match reality
+    insert into data_estimate_mismatch_norm (val, pad)
+    select (random() * 100)::int, repeat('x', 200)
+    from generate_series(1, totalcount) as n;
+
+    analyze data_estimate_mismatch_norm;
+
+    -- skewed: uniform data, but we tell the planner it's heavily skewed
+    insert into data_estimate_mismatch_skewed (val, pad)
+    select (random() * 100)::int, repeat('x', 200)
+    from generate_series(1, totalcount) as n;
+
+    analyze data_estimate_mismatch_skewed;
+
+    alter table data_estimate_mismatch_skewed set (autovacuum_enabled = false);
+
+
+    -- now overwrite the statistics: pretend 95% of rows have val = 42
+    skew_freq := 0.95;
+    skew_rows := (totalcount * skew_freq)::int;
+
+    perform pg_restore_attribute_stats(
+        'schemaname', 'mcp_explain_tool',
+        'relname',    'data_estimate_mismatch_skewed',
+        'attname',    'val',
+        'inherited',  false,
+        'null_frac',  0.0::real,
+        'avg_width',  4::integer,
+        'n_distinct', 100::real,
+        'most_common_vals',  '{42}'::text,
+        'most_common_freqs', '{0.95}'::real[],
+        'histogram_bounds',  '{0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100}'::text
+    );
+end;
+$$;
+
+create procedure clear_estimate_mismatch()
+language plpgsql
+set search_path = mcp_explain_tool, pg_catalog
+as $$
+begin
+    truncate data_estimate_mismatch_norm, data_estimate_mismatch_skewed
+        restart identity;
+end;
+$$;
+
+
+-- -----------------------------------------------------------------------------
 --  Aggregates (grow as adapters are added)
 -- -----------------------------------------------------------------------------
 
@@ -333,6 +404,7 @@ begin
     call fill_disk_spill_hash(totalcount);
     call fill_nested_loop(totalcount);
     call fill_bitmap_heap_scan(totalcount);
+    call fill_estimate_mismatch(totalcnt);
 end;
 $$;
 
@@ -347,6 +419,7 @@ begin
     call clear_disk_spill_hash();
     call clear_nested_loop();
     call clear_bitmap_heap_scan();
+    call clear_estimate_mismatch();
 end;
 $$;
 
