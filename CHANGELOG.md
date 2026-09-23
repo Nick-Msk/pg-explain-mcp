@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-09-23
+
 ### Added
 
 - **SQLite-backed check configuration.**
@@ -18,16 +20,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `config/seed.sql` populates the default registry for `postgres`.
   - `python -m pg_explain_mcp.config --init` rebuilds the database
     from schema and seed; `--show` prints the current state.
-  - The database is created automatically on first `load()` if missing,
-    and rebuilt automatically if the schema is corrupted.
+  - The database is created automatically on first `load()` if
+    missing, and rebuilt automatically on schema mismatch (missing
+    table or missing column).
   - Checks and plan fields are keyed by `(num, database)` and
-    `(database, raw)` respectively — the schema is multi-database
-    ready, currently populated only for `postgres`.
+    `(database, raw)` — the schema is multi-database ready,
+    currently populated only for `postgres`.
+
+- **`TARGET_DB_TYPE` environment variable.** Selects which target
+  scope the server reads from SQLite. Default: `postgres`. All
+  queries filter by this value, so a future MySQL adapter with the
+  same check names will not collide with PostgreSQL's.
 
 - **`plan_fields` — configurable plan node serialization.**
-  `summarize_plan_node` now takes its raw→key mapping from
-  `plan_fields` instead of a hard-coded `_PLAN_FIELDS` dictionary.
-  Fields can be toggled or renamed from SQL without touching the code.
+  `summarize_plan_node` now takes its raw→key mapping from the
+  `plan_fields` table instead of a hard-coded `_PLAN_FIELDS`
+  dictionary. Fields can be toggled or renamed from SQL without
+  touching the code. The new `summarize_plan_node(node, fields)`
+  signature requires the mapping as an explicit argument.
+
+- **Runtime check management via MCP tools.**
+  - `show_params(checker=None)` — lists check parameters with current
+    and default values. A leading `*` marks params that differ from
+    the default.
+  - `set_checker_value(checker, param, value)` — changes a parameter.
+    Accepts `str | int | float` for `value`; validated against the
+    declared type before saving.
+  - `reset_checker_value(checker, param=None)` — restores one parameter
+    or all parameters of a check to their defaults.
 
 - **`checks_applied` in the `explain` output.**
   Every report now lists the names of the checks that actually ran.
@@ -35,15 +55,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   relevant check is disabled in the configuration" instead of
   speculating about thresholds.
 
+- **`check_params.default_value` column.**
+  Stores the seed value for each parameter. `reset_checker_value`
+  reads from it to restore a parameter.
+
 ### Changed
 
 - **`PlanCheck` constructors take thresholds as arguments.**
   Module-level constants (`THRESHOLD_ROWS`, `MIN_FILTER_RATIO`,
-  `MIN_ROWS`, `HEAP_FETCH_RATIO`, ...) have been removed. Defaults in
-  `__init__` preserve v0.2.0 behaviour for callers that instantiate
-  checks directly.
-- **`DEFAULT_CHECKS` removed** from `analyzer.py`. The SQLite registry
-  is now the single source of truth. Tests use
+  `MIN_ROWS`, `HEAP_FETCH_RATIO`, ...) have been removed. Defaults
+  in `__init__` preserve v0.2.0 behaviour for callers that
+  instantiate checks directly.
+- **`DEFAULT_CHECKS` removed** from `analyzer.py`. The SQLite
+  registry is now the single source of truth. Tests use
   `tests/conftest.ALL_CHECKS` instead.
 - **`analyze_plan` requires `checks` explicitly.** The argument is no
   longer optional — there is no fallback registry.
@@ -53,12 +77,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `type` (e.g. `"seq_scan"`) is what appears in the JSON
     `issues[].type` field. Existing documentation and examples use
     the `snake_case` form.
+- **`server.py` exposes three new tools** (`show_params`,
+  `set_checker_value`, `reset_checker_value`). All three are scoped
+  to `TARGET_DB_TYPE`.
 
 ### Fixed
 
 - `python -m pg_explain_mcp.config --init` is now idempotent —
   re-running drops and rebuilds `checks.db` instead of failing on
   UNIQUE constraint violations.
+- `_ensure_db` now validates column presence, not just table
+  presence. A stale database created before a schema migration is
+  rebuilt automatically instead of failing at query time.
+- `set_checker_value` accepts `int` and `float` scalars in addition
+  to strings, so an LLM passing `5000` instead of `"5000"` no longer
+  trips client-side schema validation.
 
 ## [0.2.0] — 2026-09-23
 
@@ -213,7 +246,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The analyzer enforces read-only access at the transaction level.
 - `mcp` dependency is pinned to `<2.0.0` for SDK compatibility.
 
-[Unreleased]: https://github.com/Nick-Msk/pg-explain-mcp/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/Nick-Msk/pg-explain-mcp/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/Nick-Msk/pg-explain-mcp/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Nick-Msk/pg-explain-mcp/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Nick-Msk/pg-explain-mcp/releases/tag/v0.1.0
 
