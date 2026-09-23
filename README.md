@@ -12,47 +12,63 @@ execution plans. Built as a bridge between LLM-based coding assistants
 
 The server runs `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` on `SELECT`
 queries and returns a structured report highlighting performance
-bottlenecks — so an LLM can explain *why* a query is slow and *what to do*
-about it, instead of just describing the SQL.
+bottlenecks — so an LLM can explain *why* a query is slow and *what to
+do* about it, instead of just describing the SQL.
 
 ## Features
 
-- **`ping`** — health check.
-- **`list_tables`** — returns all user tables with their columns.
+### MCP tools
+
 - **`explain`** — runs `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` on a
-  `SELECT`/`WITH` query and returns a structured report highlighting:
-  - Sequential scans on large tables (likely missing indexes)
-  - Large mismatches between planner estimates and actual row counts
-  - Disk spills in sorts and hash joins (`work_mem` issues)
-  - Excessive `Nested Loop` iterations
-- **`list_indexes`** — returns existing indexes for a table (or all tables).
-All database access is **read-only** — the connection runs inside
-`SET TRANSACTION READ ONLY`, so even a buggy query cannot modify data.
+  `SELECT` / `WITH` query and returns a structured report.
+- **`list_tables`** — returns all user tables and their columns.
+- **`list_indexes`** — returns existing indexes for a table (or all
+  tables), so the assistant can avoid recommending an index that
+  already exists.
+- **`list_parameters`** — returns runtime parameters relevant to plan
+  analysis: `work_mem`, `hash_mem_multiplier`, `shared_buffers`,
+  `effective_cache_size`, `random_page_cost`, `seq_page_cost`,
+  parallel worker limits, `jit`.
+- **`ping`** — health check.
 
-## Architecture
+### Checks
 
-```
-LLM (Continue.dev) ──MCP──> pg-explain-mcp ──psycopg3──> PostgreSQL
-                                  │
-                                  ├── db.py        (connection, EXPLAIN)
-                                  ├── analyzer.py  (plan analysis)
-                                  └── server.py    (MCP tools)
-```
+Every `explain` response includes an `issues` array. Each entry is
+produced by an independent, pluggable `PlanCheck`:
 
-- **`db.py`** — connection layer. Opens a read-only transaction,
-  provides `get_schema()` and `explain_query()`.
-- **`analyzer.py`** — recursive traversal of the JSON plan tree. Detects
-  bottlenecks and produces a structured report with `issues` and
-  `summary`.
-- **`server.py`** — MCP entry point. Exposes 4 tools via `FastMCP`.
+| Check                    | What it reports                                        |
+|--------------------------|--------------------------------------------------------|
+| `SeqScanCheck`           | Sequential scan that discards most of what it reads    |
+| `IndexScanCheck`         | Stale visibility map / poor heap locality              |
+| `BitmapHeapScanCheck`    | Large Bitmap Heap Scan                                 |
+| `DiskSpillSortCheck`     | Sort spilling to disk (`external merge`)               |
+| `DiskSpillHashCheck`     | Hash operation using multiple batches                  |
+| `NestedLoopCheck`        | Nested Loop with a high number of inner iterations     |
+| `EstimateMismatchCheck`  | Planner cardinality misestimate                        |
 
-## Requirements
+To add a new check, implement the `PlanCheck` protocol in
+`src/pg_explain_mcp/analyzer.py` and register the instance in
+`DEFAULT_CHECKS`. No changes to `server.py` or the traversal logic are
+required.
 
-- Python 3.10+
-- PostgreSQL 12+ (tested on 16, 17, 18)
-- An MCP-compatible client (Continue.dev, Claude Desktop, Cursor, etc.)
+### Structured plan output
+
+`explain` returns a compact `plan_nodes` tree alongside `issues`.
+Only the fields that matter for reasoning are kept:
+
+- `node_type`, `relation`, `index`
+- `actual_rows`, `plan_rows`, `actual_loops`
+- `rows_removed_by_filter`, `heap_fetches`, `shared_read_blocks`
+- `sort_method`, `sort_space_type`, `sort_space_used_kb`
+- `hash_buckets`, `hash_batches`, `peak_memory_usage_kb`
+- `parallel_aware`
+
+This lets the assistant reason about the plan without guessing, and
+prevents hallucinations such as inventing node types or statistics.
 
 ## Installation
+
+Requires Python 3.10+ and `pg_config` in `PATH`.
 
 ```bash
 git clone https://github.com/Nick-Msk/pg-explain-mcp.git
@@ -68,11 +84,13 @@ pip install -e .
 `pip install -e .` installs the package in editable mode and registers
 the `pg-explain-mcp` console script.
 
-### Verify installation
+### Verify
 
 ```bash
 python -c "from pg_explain_mcp import server; print('OK')"
 # → OK
+
+pytest -v
 ```
 
 ## Configuration
@@ -89,112 +107,88 @@ The server reads connection parameters from environment variables:
 
 ## Usage with Continue.dev
 
-Create `.continue/mcpServers/pg-explain.yaml` in your workspace:
+Ready-to-use configuration files are available in
+[`config_example/`](config_example/):
 
-```yaml
-name: PostgreSQL Explain MCP
-version: 0.0.1
-schema: v1
-mcpServers:
-  - name: pg-explain
-    command: /path/to/pg-explain-mcp/.venv/bin/python
-    args:
-      - "-m"
-      - "pg_explain_mcp.server"
-    env:
-      PG_HOST: localhost
-      PG_PORT: "5432"
-      PG_USER: your_user
-      PG_PASSWORD: your_password
-      PG_DATABASE: your_database
-```
+- [`config_example/mcpServers/pg-explain.yaml`](config_example/mcpServers/pg-explain.yaml)
+  — MCP server registration.
+- [`config_example/postgres-agent.md`](config_example/postgres-agent.md)
+  — system prompt for an assistant that knows how to use `pg-explain`
+  and a generic PostgreSQL MCP server, with per-check guidance.
 
-Then in VS Code:
+### Setup
 
-1. `Cmd+Shift+P` → **`Continue: Reload Config`**.
-2. Open a new chat in **Agent Mode** (not Chat, not Edit).
-3. Ask:
+1. Copy `config_example/mcpServers/pg-explain.yaml` into your
+   workspace's `.continue/mcpServers/` directory.
+2. Replace the placeholders:
+   - `command:` — full path to the Python interpreter inside your
+     `.venv`.
+   - `PG_USER`, `PG_PASSWORD`, `PG_DATABASE` — your PostgreSQL
+     credentials.
+3. (Optional) Copy `config_example/postgres-agent.md` into
+   `.continue/agents/` to use it as a custom agent prompt.
+4. In VS Code: `Cmd+Shift+P` → **`Continue: Reload Config`**.
+5. Open a new chat in **Agent Mode** (not Chat, not Edit).
 
-   > Use the pg-explain tool to analyze:
-   > `SELECT * FROM onek1 WHERE hundred BETWEEN 5 AND 55;`
-
-The agent will call the `explain` tool and return a structured report
-with execution time, detected issues, and recommendations.
-
-### Debugging
-
-If the tool doesn't appear, check that:
-
-- The path in `command:` points to the actual Python inside `.venv`.
-- The package is installed: `pip show pg-explain-mcp` (should show
-  `Editable project location: .../pg-explain-mcp`).
-- You are in **Agent Mode**, not Chat or Edit.
-
-You can also test the server standalone via the official MCP Inspector:
-
-```bash
-mcp dev src/pg_explain_mcp/server.py
-```
-
-> ⚠️ **Warning.** `explain` runs `EXPLAIN (ANALYZE, ...)`, which
-> **actually executes** the query. Avoid running it against production
-> databases during peak hours. Use a replica or staging environment
-> whenever possible.
-
-## Example
+### Example
 
 Prompt:
 
 > Use the pg-explain tool to analyze:
-> `SELECT * FROM onek1 WHERE hundred BETWEEN 5 AND 55;`
+> `SELECT val FROM onek1 WHERE hundred BETWEEN 5 AND 55;`
 
-Response (abridged):
+Response:
 
 ```
 ✓ Continue used the pg-explain explain tool
 
 Execution Time: 0.904 ms
 Planning Time:  1.228 ms
-Total Time:     2.132 ms
 Issues Found:   None
 
 Analysis:
-The query is running very fast, likely because the onek1 table is
-relatively small (estimated at 1,000 rows), allowing a Sequential Scan
-almost instantly.
-
-Note: There is no index on the `hundred` column. For a small table this
-is fine, but if the table grows to millions of rows, this query would
-become slower...
+The plan shows an Index Only Scan on idx_onek1_hundred.
+Heap Fetches: 0 — the visibility map is fresh, no heap lookups needed.
 ```
-## Demo
 
-See [`usage_examples/`](usage_examples/) for full write-ups.
+## Test fixtures
 
-- [Ordered-set aggregates over a 5M-row table](usage_examples/sample_query1.md)
-- [IndexScanCheck: healthy table](usage_examples/pg_index_scan_adapters/sample_index_on_normal.md)
-- [IndexScanCheck: stale visibility map after churn](usage_examples/pg_index_scan_adapters/sample_index_on_unclastered.md)
-
-The IndexScanCheck examples include a reproducible SQL scenario:
-[`usage_examples/pg_index_scan_adapters/pg_samples.sql`](usage_examples/pg_index_scan_adapters/pg_samples.sql).
-
-## Development
+The repository ships a PostgreSQL extension
+[`mcp_explain_tool`](fixtures/) that creates empty tables and
+`fill_*` / `clear_*` procedures for every check. It is versioned
+independently from the Python package.
 
 ```bash
-# Run the server manually (waits for JSON-RPC on stdio)
-python -m pg_explain_mcp.server
-
-# Or use the console script
-pg-explain-mcp
+cd fixtures
+make install
 ```
 
-Note: running the server manually in a terminal is **not** a valid test
-— MCP servers speak JSON-RPC over stdio and expect a client. Use
-`mcp dev` or an MCP-compatible assistant for interactive testing.
+```sql
+create extension mcp_explain_tool;
+call mcp_explain_tool.fill_all(1000000);
+```
 
-## Changelog
+See [`fixtures/README.md`](fixtures/README.md) for details, including
+the VACUUM policy and the autovacuum exceptions for tables that need a
+stale visibility map or fake statistics.
 
-See [`CHANGELOG.md`](CHANGELOG.md) for a list of changes.
+## Usage examples
+
+Real-world runs of `pg-explain-mcp` against PostgreSQL, one set per
+check, with the raw tool output and analysis:
+
+| Check                  | Examples                                                              |
+|------------------------|-----------------------------------------------------------------------|
+| `IndexScanCheck`       | healthy vs. stale visibility map                                      |
+| `SeqScanCheck`         | with and without an index                                             |
+| `DiskSpillSortCheck`   | in-memory vs. external merge, plus a *precise* `work_mem` variant     |
+| `DiskSpillHashCheck`   | single-batch vs. multi-batch spill, plus a *precise* variant          |
+| `NestedLoopCheck`      | 100 vs. 5000 inner iterations                                         |
+| `BitmapHeapScanCheck`  | narrow vs. wide range on the same table                               |
+| `EstimateMismatchCheck`| norm, norm+index, skewed, skewed-other-value                          |
+
+See [`usage_examples/`](usage_examples/) for the full index, the test
+environment, and prompting tips.
 
 ## Project structure
 
@@ -203,48 +197,44 @@ pg-explain-mcp/
 ├── src/
 │   └── pg_explain_mcp/
 │       ├── __init__.py
-│       ├── server.py       # MCP entry point
-│       ├── db.py           # connection + EXPLAIN
-│       └── analyzer.py     # plan analysis
+│       ├── server.py         # MCP entry point — exposes tools
+│       ├── db.py             # connection + EXPLAIN + schema queries
+│       └── analyzer.py       # PlanCheck adapters + traversal
+├── tests/                    # unit tests for checks and helpers
+├── fixtures/                 # mcp_explain_tool PostgreSQL extension
+├── usage_examples/           # real-world runs, one set per check
+├── config_example/           # Continue.dev MCP + agent config
+├── images/                   # screenshots
 ├── pyproject.toml
+├── CHANGELOG.md
+├── DISCLAIMER.md
 ├── README.md
 └── LICENSE
 ```
 
-## Continue.dev Integration
-
-Ready-to-use configuration files are available in [`examples/`](examples/):
-
-- [`examples/mcpServers/pg-explain.yaml`](examples/mcpServers/pg-explain.yaml) — MCP server config
-- [`examples/postgres-agent.md`](examples/postgres-agent.md) — agent prompt
-
-## Contributing
-
-Pull requests are welcome. For major changes, please open an issue first
-to discuss what you would like to change.
-
 ## Roadmap
 
 - **Configurable checks.** Move `PlanCheck` enable/disable flags and
-  thresholds into a small SQLite config database (or a YAML file).
-  This will let users turn off checks that do not apply to their
-  workload — for example, `nested_loop` reports at `INFO` level and
-  is useful on some setups but noise on others.
-- **Additional checks** — `estimate_mismatch` for stale statistics,
-  `partition_pruning` for partitioned tables.
-- **Multi-database support** — currently PostgreSQL-only; the
-  `PlanCheck` interface is database-agnostic in principle.
-
-## License
-
-MIT — see [LICENSE](LICENSE) for details.
+  thresholds into a small config file (SQLite or YAML), so users can
+  turn off checks that do not apply to their workload — for example,
+  `nested_loop` reports at `INFO` level and is useful on some setups
+  but noise on others.
+- **Additional checks** — `partition_pruning` for partitioned tables,
+  `jit_decision` for expensive JIT compilation on short queries.
+- **Multi-database support** — the `PlanCheck` interface is
+  database-agnostic in principle; currently PostgreSQL-only.
 
 ## Disclaimer
 
 This project is a **diagnostic tool provided "as is"**. Recommendations
-from the analyzer — or from an LLM assistant using it — are suggestions,
-not guarantees. Always validate against your own database before applying
-changes to a production system.
+from the analyzer — or from an LLM assistant using it — are
+suggestions, not guarantees. Always validate against your own database
+before applying changes to a production system. `EXPLAIN ANALYZE`
+**actually executes** the query; avoid running it against production
+databases during peak hours.
 
 See [`DISCLAIMER.md`](DISCLAIMER.md) for the full text.
 
+## License
+
+MIT — see [`LICENSE`](LICENSE) for details.
