@@ -32,11 +32,11 @@ This copies two files into your PostgreSQL extension directory:
 ## Create in a database
 
 ```sql
-CREATE EXTENSION mcp_explain_tool;
+create extension mcp_explain_tool;
 ```
 
-The schema `mcp_explain_tool` is created automatically (it is declared in
-`mcp_explain_tool.control` via `schema = mcp_explain_tool` and
+The schema `mcp_explain_tool` is created automatically (it is declared
+in `mcp_explain_tool.control` via `schema = mcp_explain_tool` and
 `relocatable = false`).
 
 The `mcp_` prefix is used instead of `pg_` because PostgreSQL reserves
@@ -52,94 +52,119 @@ Verify:
 
 ## Populate
 
-Every adapter has its own `fill_<adapter>(totalcount int)` procedure
-that populates **two tables**:
+Every adapter has its own `fill_<adapter>(totalcount int)` procedure.
+Most adapters use a **pair** of tables:
 
-| Table                       | Purpose                                    |
-|-----------------------------|--------------------------------------------|
-| `data_<adapter>_norm`       | Baseline — the check must **not** trigger  |
-| `data_<adapter>_<failing>`  | Degraded — the check **must** trigger      |
+| table                       | purpose                                      |
+|-----------------------------|----------------------------------------------|
+| `data_<adapter>_norm`       | baseline — the check must **not** trigger    |
+| `data_<adapter>_<variant>`  | degraded — the check **must** trigger        |
 
-The `<failing>` suffix is check-specific: `unclastered`, `large`, `spill`,
-`stale`, `many`, etc.
+The `<variant>` suffix is adapter-specific:
+
+| adapter            | variant       | meaning                              |
+|--------------------|---------------|--------------------------------------|
+| `index_scan`       | `unclastered` | stale visibility map                 |
+| `seq_scan`         | `nonindex`    | no index on the filter column        |
+| `disk_spill_sort`  | `spill`       | sort payload exceeds `work_mem`      |
+| `disk_spill_hash`  | `spill`       | hash table exceeds `work_mem`        |
+| `estimate_mismatch`| `skewed`      | fake statistics via `pg_restore_*`   |
+
+Some adapters differ from the pair pattern:
+
+- **`nested_loop`** — three tables: `_norm`, `_many`, `_inner`. The
+  inner table is the indexed lookup target shared by both queries.
+- **`bitmap_heap_scan`** — a **single** table. The check fires based on
+  the selectivity of the query, not the state of the table.
 
 ### One adapter at a time
 
 ```sql
-CALL mcp_explain_tool.fill_index_scan(5000000);
+call mcp_explain_tool.fill_index_scan(5000000);
 ```
 
 ### All adapters at once
 
 ```sql
-CALL mcp_explain_tool.fill_all(5000000);
+call mcp_explain_tool.fill_all(5000000);
 ```
 
 ### About VACUUM
 
 `fill_*` procedures **do not** run `VACUUM` — it cannot be executed
-inside a transaction or a procedure. For adapters that compare *fresh*
-and *stale* visibility maps (like `index_scan`), run after filling:
+inside a transaction or a procedure. After filling, run `VACUUM
+ANALYZE` from `psql` for tables that need a fresh visibility map:
 
 ```sql
-VACUUM ANALYZE mcp_explain_tool.data_index_scan_norm;
+vacuum analyze mcp_explain_tool.data_index_scan_norm;
 ```
 
-For adapters that need a stale visibility map, `autovacuum_enabled = false`
-is already set on the `_<failing>` table, so `fill_*` will leave it stale.
+For adapters that rely on a **stale** visibility map or **fake
+statistics**, autovacuum is disabled at the table level so the
+`fill_*` procedures can leave the table in the desired state:
+
+| table                              | why autovacuum is off                          |
+|------------------------------------|------------------------------------------------|
+| `data_index_scan_unclastered`      | a fresh visibility map would hide the problem  |
+| `data_estimate_mismatch_skewed`    | autovacuum's `ANALYZE` would overwrite fake stats |
 
 ## Clear
 
 ```sql
-CALL mcp_explain_tool.clear_all();
+call mcp_explain_tool.clear_all();
 ```
 
 Or one adapter:
 
 ```sql
-CALL mcp_explain_tool.clear_index_scan();
+call mcp_explain_tool.clear_index_scan();
 ```
 
 ## Uninstall
 
 ```sql
-DROP EXTENSION mcp_explain_tool CASCADE;
-DROP SCHEMA mcp_explain_tool CASCADE;
+drop extension mcp_explain_tool cascade;
+drop schema mcp_explain_tool cascade;
 ```
 
-Note: `DROP EXTENSION` removes all objects owned by the extension, but
-the schema itself is **not** dropped automatically. To remove it as well,
+`drop extension` removes all objects owned by the extension, but the
+schema itself is **not** dropped automatically. To remove it as well,
 run the second command.
 
 ## Adapters covered
 
-| Adapter                    | Tables                                                  |
-|----------------------------|---------------------------------------------------------|
-| `index_scan`               | `data_index_scan_norm`, `data_index_scan_unclastered`   |
-| `seq_scan`                 | *(planned)*                                             |
-| `estimate_mismatch`        | *(planned)*                                             |
-| `disk_spill_sort`          | *(planned)*                                             |
-| `disk_spill_hash`          | *(planned)*                                             |
-| `nested_loop`              | *(planned)*                                             |
-| `bitmap_heap_scan`         | `data_bitmap_heap_scan`                                |
+| adapter              | tables                                                                    | status |
+|----------------------|---------------------------------------------------------------------------|--------|
+| `index_scan`         | `data_index_scan_norm`, `data_index_scan_unclastered`                     | done   |
+| `seq_scan`           | `data_seq_scan_norm`, `data_seq_scan_nonindex`                            | done   |
+| `disk_spill_sort`    | `data_disk_spill_sort_norm`, `data_disk_spill_sort_spill`                 | done   |
+| `disk_spill_hash`    | `data_disk_spill_hash_norm`, `data_disk_spill_hash_spill`                 | done   |
+| `nested_loop`        | `data_nested_loop_norm`, `data_nested_loop_many`, `data_nested_loop_inner`| done   |
+| `bitmap_heap_scan`   | `data_bitmap_heap_scan`                                                   | done   |
+| `estimate_mismatch`  | `data_estimate_mismatch_norm`, `data_estimate_mismatch_skewed`            | done   |
 
 ## Adding a new adapter
 
-1. Add two `CREATE TABLE` blocks — `data_<adapter>_norm` and
-   `data_<adapter>_<failing>` — to `mcp_explain_tool--0.1.0.sql`.
-2. Add a `fill_<adapter>(totalcount int)` procedure that populates both.
-3. Add a `clear_<adapter>()` procedure that truncates both.
+1. Add the tables (`data_<adapter>_*`) to
+   `mcp_explain_tool--0.1.0.sql`. Follow the pair convention
+   (`_norm` + `_<variant>`) unless the check is query-driven, in which
+   case a single table is fine.
+2. Add a `fill_<adapter>(totalcount int)` procedure that populates all
+   tables for the adapter, then runs `analyze` on them.
+3. Add a `clear_<adapter>()` procedure that truncates them with
+   `restart identity`.
 4. Register both in `fill_all` / `clear_all`.
 5. Reinstall:
    ```bash
    make install
    ```
-6. In `psql`:
+6. Recreate in `psql`:
    ```sql
-   DROP EXTENSION mcp_explain_tool CASCADE;
-   CREATE EXTENSION mcp_explain_tool;
+   drop extension mcp_explain_tool cascade;
+   create extension mcp_explain_tool;
    ```
 7. Add a usage example under `../usage_examples/pg_<adapter>/`.
+8. Update the **Adapters covered** table above.
 
 ## Layout
 
@@ -153,16 +178,17 @@ fixtures/
 
 ## Static analysis
 
-`mcp_explain_tool` procedures can be checked with [`plpgsql_check`](https://github.com/okbob/plpgsql_check):
+`mcp_explain_tool` procedures can be checked with
+[`plpgsql_check`](https://github.com/okbob/plpgsql_check):
 
 ```sql
 create extension if not exists plpgsql_check;
 
 select p.proname,
        plpgsql_check_function(
-	   		p.oid::regprocedure,
-			performance_warnings := true
-	   ) as issues
+           p.oid::regprocedure,
+           performance_warnings := true
+       ) as issues
 from pg_proc p
 join pg_namespace n on n.oid = p.pronamespace
 where n.nspname = 'mcp_explain_tool'
