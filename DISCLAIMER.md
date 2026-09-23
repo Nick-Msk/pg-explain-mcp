@@ -53,6 +53,19 @@ run directly in `psql`.
 
 Error messages shown to the LLM must be descriptive. Do not embed shell commands in exceptions raised by MCP tools — the assistant will try to execute them. Put usage instructions in the README instead.
 
+## 3a. Write Access to the Config Database
+
+Three MCP tools (`set_checker_value`, `reset_checker_value`, and
+`show_params`) read and write the SQLite config database at
+`config/checks.db`. This is the tool's **own** configuration store,
+not user data. It is separate from the read-only contract with
+PostgreSQL.
+
+The assistant is instructed to ask before calling
+`set_checker_value` — but the tool itself does not enforce this.
+If you deploy `pg-explain-mcp` in a shared environment, restrict
+filesystem permissions on `config/checks.db` accordingly.
+
 ## 4. No Liability
 
 The authors and contributors of `pg-explain-mcp` accept **no

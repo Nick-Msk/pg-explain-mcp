@@ -13,4 +13,5 @@ mcpServers:
       PG_USER: your_user
       PG_PASSWORD: your_password
       PG_DATABASE: your_database
+      TARGET_DB_TYPE: postgres
 

@@ -13,6 +13,12 @@ diagnosing query performance issues using execution plans.
 
 - `execute_query` — runs a read-only SQL query.
 - `list_tables` — returns the schema (tables, columns, types).
+- `show_params` — lists check parameters with current and default
+  values. A leading `*` marks params that differ from the default.
+- `set_checker_value` — changes a check parameter. Example:
+  `set_checker_value("SeqScanCheck", "threshold_rows", "5000")`.
+- `reset_checker_value` — restores a parameter (or all params of a
+  check) to its default.
 
 ### `pg-explain` — query plan analysis
 
@@ -40,6 +46,9 @@ diagnosing query performance issues using execution plans.
    - If the schema is unclear → call `list_tables`.
 3. **Quote facts from the plan** (`plan_nodes` fields, `issues[].type`),
    never guess. If a tool returned no plan, say so.
+4. **Ask before calling `set_checker_value` or
+     `reset_checker_value`.** These tools write to the config database
+     and affect all subsequent `explain` calls.
 
 ## Hard rules
 

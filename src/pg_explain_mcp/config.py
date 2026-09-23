@@ -1,5 +1,6 @@
 """SQLite-backed configuration for the PlanCheck registry."""
 
+import os
 import sqlite3
 import sys
 from pathlib import Path
@@ -18,7 +19,7 @@ from pg_explain_mcp.analyzer import (
 
 _CONFIG_DIR = Path(__file__).resolve().parent.parent.parent / "config"
 DEFAULT_DB = _CONFIG_DIR / "checks.db"
-
+TARGET_DB_TYPE = os.getenv("TARGET_DB_TYPE", "postgres")
 
 # class name → (class, {param_name: type})
 _REGISTRY: dict[str, tuple[type, dict[str, Callable[[str], Any]]]] = {
@@ -49,6 +50,164 @@ _REGISTRY: dict[str, tuple[type, dict[str, Callable[[str], Any]]]] = {
         "min_disk_blocks":  int,
     }),
 }
+
+# ---------------------------------------------------------------------------
+# Runtime management (read / write from MCP tools)
+# ---------------------------------------------------------------------------
+
+
+def _validate_value(checker: str, param: str, value: str) -> None:
+    """Ensure the value parses as the type declared in ``_REGISTRY``.
+
+    Raises ``KeyError`` if the check or param is unknown, ``ValueError``
+    if the value cannot be coerced.
+    """
+    if checker not in _REGISTRY:
+        raise KeyError(f"Unknown checker: {checker}")
+    _, param_types = _REGISTRY[checker]
+    if param not in param_types:
+        raise KeyError(f"Unknown param '{param}' for {checker}")
+    try:
+        param_types[param](value)
+    except (ValueError, TypeError) as e:
+        raise ValueError(
+            f"Invalid value {value!r} for {checker}.{param}: {e}"
+        ) from e
+
+
+def show_params(
+    checker: str | None = None,
+    database: str = "postgres",
+    db_path: Path | str = DEFAULT_DB,
+) -> list[dict[str, Any]]:
+    """Return current and default values for check params.
+
+    If ``checker`` is given, filter to that check. Returns rows with
+    keys: ``checker``, ``param``, ``value``, ``default_value``, ``changed``.
+    """
+    db_path = Path(db_path)
+    _ensure_db(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        sql = (
+            "select c.name as checker, p.param, p.value, p.default_value "
+            "from check_params p "
+            "join checks c on c.num = p.num and c.database = p.database "
+            "where p.database = ? "
+        )
+        params: tuple = (database,)
+        if checker:
+            sql += "and c.name = ? "
+            params = (database, checker)
+        sql += "order by c.num, p.param"
+
+        rows = conn.execute(sql, params).fetchall()
+        return [
+            {
+                "checker": r["checker"],
+                "param": r["param"],
+                "value": r["value"],
+                "default_value": r["default_value"],
+                "changed": r["value"] != r["default_value"],
+            }
+            for r in rows
+        ]
+
+
+def set_param(
+    checker: str,
+    param: str,
+    value: str,
+    database: str = "postgres",
+    db_path: Path | str = DEFAULT_DB,
+) -> dict[str, Any]:
+    """Set a param's current value. Validates the type first.
+
+    Returns ``{"checker": ..., "param": ..., "old": ..., "new": ...}``.
+    """
+    db_path = Path(db_path)
+    _ensure_db(db_path)
+    _validate_value(checker, param, value)
+
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "select p.value from check_params p "
+            "join checks c on c.num = p.num and c.database = p.database "
+            "where p.database = ? and c.name = ? and p.param = ?",
+            (database, checker, param),
+        ).fetchone()
+        if row is None:
+            raise KeyError(f"No param {checker}.{param} in database")
+
+        old = row["value"]
+        conn.execute(
+            "update check_params set value = ? "
+            "where database = ? and param = ? "
+            "and num = (select num from checks "
+            "           where database = ? and name = ?)",
+            (value, database, param, database, checker),
+        )
+        conn.commit()
+
+    return {"checker": checker, "param": param, "old": old, "new": value}
+
+
+def reset_param(
+    checker: str,
+    param: str | None = None,
+    database: str = "postgres",
+    db_path: Path | str = DEFAULT_DB,
+) -> list[dict[str, Any]]:
+    """Reset params to their default values.
+
+    If ``param`` is given, reset only that one. Otherwise reset every
+    param of the check. Returns the list of changes made.
+    """
+    db_path = Path(db_path)
+    _ensure_db(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        sql = (
+            "select c.name as checker, p.param, p.value, p.default_value "
+            "from check_params p "
+            "join checks c on c.num = p.num and c.database = p.database "
+            "where p.database = ? and c.name = ? "
+        )
+        args: tuple = (database, checker)
+        if param:
+            sql += "and p.param = ? "
+            args = (database, checker, param)
+
+        rows = conn.execute(sql, args).fetchall()
+        if not rows:
+            raise KeyError(
+                f"No params for {checker}"
+                + (f".{param}" if param else "")
+            )
+
+        changes = []
+        for r in rows:
+            if r["value"] == r["default_value"]:
+                continue
+            conn.execute(
+                "update check_params set value = ? "
+                "where database = ? and param = ? "
+                "and num = (select num from checks "
+                "           where database = ? and name = ?)",
+                (r["default_value"], database, r["param"], database, checker),
+            )
+            changes.append({
+                "checker": checker,
+                "param": r["param"],
+                "old": r["value"],
+                "new": r["default_value"],
+            })
+        conn.commit()
+
+    return changes
 
 def _ensure_db(db_path: Path) -> None:
     """Ensure the config DB exists *and* has the expected schema.
@@ -129,9 +288,12 @@ class CheckRegistry:
     without restarting the MCP server.
     """
 
-    def __init__(self, db_path: Path | str = DEFAULT_DB, database: str = "postgres"):
+    def __init__(self, db_path: Path | str = DEFAULT_DB) -> None:
         self._db_path = Path(db_path)
-        self._database = database
+
+    @property
+    def target(self) -> str:
+        return TARGET_DB_TYPE
 
     def load(self) -> tuple[PlanCheck, ...]:
         return load_checks(self._database, self._db_path)

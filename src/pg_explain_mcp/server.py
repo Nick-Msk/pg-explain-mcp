@@ -5,7 +5,13 @@ import json
 from mcp.server.fastmcp import FastMCP
 
 from pg_explain_mcp.analyzer import analyze_plan, summarize_plan_node
-from pg_explain_mcp.config import DEFAULT_DB, CheckRegistry
+from pg_explain_mcp.config import (
+    DEFAULT_DB,
+    CheckRegistry,
+    reset_param as reset_param_impl,
+    set_param as set_param_impl,
+    show_params as show_params_impl,
+)
 from pg_explain_mcp.db import explain_query, get_indexes, get_params, get_schema
 
 _registry = CheckRegistry(DEFAULT_DB)
@@ -121,6 +127,67 @@ def explain(sql: str) -> str:
     except Exception as e:
         return f"Execution error: {e}"
 
+@mcp.tool()
+def show_params(checker: str | None = None) -> str:
+    """Show check parameters for the configured target database.
+
+    Args:
+        checker: Optional check name. If omitted, returns params for
+                 all checks.
+    """
+    try:
+        rows = show_params_impl(checker, database=_registry.target)
+        return _format_params_table(rows)
+    except KeyError as e:
+        return f"Error: {e}"
+    except Exception as e:
+        return f"Error: {e}"
+
+@mcp.tool()
+def set_checker_value(checker: str, param: str, value: str) -> str:
+    """Set a check parameter's current value.
+
+    Args:
+        checker: Check name (e.g. ``SeqScanCheck``).
+        param:   Parameter name (e.g. ``threshold_rows``).
+        value:   New value as a string.
+    """
+    try:
+        result = set_param_impl(
+            checker, param, value, database=_registry.target
+        )
+        return (
+            f"{result['checker']}.{result['param']}: "
+            f"{result['old']} → {result['new']}"
+        )
+    except (KeyError, ValueError) as e:
+        return f"Error: {e}"
+    except Exception as e:
+        return f"Error: {e}"
+
+@mcp.tool()
+def reset_checker_value(checker: str, param: str | None = None) -> str:
+    """Reset a check parameter (or all params of a check) to defaults.
+
+    Args:
+        checker: Check name.
+        param:   Optional parameter name. If omitted, resets every
+                 param of the check.
+    """
+    try:
+        changes = reset_param_impl(
+            checker, param, database=_registry.target
+        )
+        if not changes:
+            return "Already at defaults — nothing to reset."
+        return "\n".join(
+            f"{c['checker']}.{c['param']}: {c['old']} → {c['new']}"
+            for c in changes
+        )
+    except KeyError as e:
+        return f"Error: {e}"
+    except Exception as e:
+        return f"Error: {e}"
 
 def main() -> None:
     """Entry point for the `pg-explain-mcp` console script."""

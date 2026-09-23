@@ -20,10 +20,11 @@ create unique index if not exists checks_name_db
     on checks (name, database);
 
 create table if not exists check_params (
-    num         integer not null,
-    database    text    not null,
-    param       text    not null,
-    value       text    not null,
+    num             integer not null,
+    database        text    not null,
+    param           text    not null,
+    value           text    not null,
+    default_value   text    not null,
     primary key (num, database, param),
     foreign key (num, database) references checks (num, database)
         on delete cascade
