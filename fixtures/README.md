@@ -1,5 +1,10 @@
 # mcp_explain_tool — test fixtures
 
+> **Versioning note.** `mcp_explain_tool` is versioned independently
+> from the `pg-explain-mcp` Python package. Its version tracks the
+> fixture API (table names, procedure signatures), not the analyzer
+> release. The current extension version is `0.1.0`.
+
 A PostgreSQL extension that creates **empty tables** and **`fill_*` /
 `clear_*` procedures** for every `PlanCheck` in
 [`pg-explain-mcp`](../).
