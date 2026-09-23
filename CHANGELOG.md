@@ -160,6 +160,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The analyzer enforces read-only access at the transaction level.
 - `mcp` dependency is pinned to `<2.0.0` for SDK compatibility.
 
+### Added
+
+- **SQLite-backed check configuration.**
+  `CheckRegistry.load()` reads the list of enabled checks and their
+  parameters from `config/checks.db`. Edits to the database take effect
+  on the next `explain` call — no restart required.
+  - `python -m pg_explain_mcp.config --init` builds the database from
+    `config/schema.sql` and `config/seed.sql`.
+  - Checks keyed by `(num, database)` — multi-database ready, currently
+    populated only for `postgres`.
+
+### Changed
+
+- **`PlanCheck` constructors take thresholds as arguments.**
+  Module-level constants (`THRESHOLD_ROWS`, `MIN_FILTER_RATIO`, ...)
+  removed. Defaults in `__init__` preserve v0.2.0 behaviour.
+- **`DEFAULT_CHECKS` removed** from `analyzer.py`. The SQLite registry
+  is the single source of truth. Tests use `tests/conftest.ALL_CHECKS`.
+- **Check classes now have both `name` and `type`:**
+  - `name` (e.g. `"SeqScanCheck"`) matches the SQLite key.
+  - `type` (e.g. `"seq_scan"`) is what appears in the JSON `issues`.
+
 [Unreleased]: https://github.com/Nick-Msk/pg-explain-mcp/compare/v0.2.0...HEAD
 [0.2.0]: https://github.com/Nick-Msk/pg-explain-mcp/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Nick-Msk/pg-explain-mcp/releases/tag/v0.1.0

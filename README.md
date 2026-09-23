@@ -51,6 +51,15 @@ To add a new check, implement the `PlanCheck` protocol in
 `DEFAULT_CHECKS`. No changes to `server.py` or the traversal logic are
 required.
 
+Checks are loaded from a SQLite config database at
+`config/checks.db`. Enable, disable, or retune them without touching
+the code:
+
+```bash
+python -m pg_explain_mcp.config --init       # create / rebuild from seed
+sqlite3 config/checks.db \
+  "update checks set enabled = 0 where name = 'NestedLoopCheck';"
+
 ### Structured plan output
 
 `explain` returns a compact `plan_nodes` tree alongside `issues`.

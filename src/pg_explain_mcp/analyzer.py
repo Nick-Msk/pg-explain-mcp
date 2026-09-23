@@ -68,9 +68,16 @@ class SeqScanCheck:
     already exists, rather than blindly recommending one.
     """
 
-    name = "seq_scan"
-    THRESHOLD_ROWS = 1000
-    MIN_FILTER_RATIO = 0.9   # 90 % of read rows must be discarded
+    name = "SeqScanCheck"
+    type = "seq_scan"
+
+    def __init__(
+        self,
+        threshold_rows: int = 1000,
+        min_filter_ratio: float = 0.9,
+    ) -> None:
+        self.threshold_rows = threshold_rows
+        self.min_filter_ratio = min_filter_ratio
 
     def check(self, node: dict[str, Any]) -> list[Issue]:
         if node.get("Node Type") != "Seq Scan":
@@ -80,20 +87,20 @@ class SeqScanCheck:
         removed = node.get("Rows Removed by Filter", 0)
         total_read = actual + removed
 
-        if total_read <= self.THRESHOLD_ROWS:
+        if total_read <= self.threshold_rows:
             return []
 
         if removed == 0:
             return []
 
-        if removed / total_read < self.MIN_FILTER_RATIO:
+        if removed / total_read < self.min_filter_ratio:
             return []
 
         relation = node.get("Relation Name", "?")
         return [
             Issue(
                 severity=SEVERITY_WARNING,
-                type=self.name,
+                type=self.type,
                 message=(
                     f"Sequential scan on '{relation}' read {total_read} rows "
                     f"({actual} returned, {removed} filtered out, "
@@ -121,9 +128,16 @@ class EstimateMismatchCheck:
     tiny subsets, not a real problem.
     """
 
-    name = "estimate_mismatch"
-    THRESHOLD_RATIO = 10.0
-    MIN_ROWS = 1000
+    name = "EstimateMismatchCheck"
+    type = "estimate_mismatch"
+
+    def __init__(
+        self,
+        threshold_ratio: float = 10.0,
+        min_rows: int = 1000,
+    ) -> None:
+        self.threshold_ratio = threshold_ratio
+        self.min_rows = min_rows
 
     def check(self, node: dict[str, Any]) -> list[Issue]:
         planned = node.get("Plan Rows", 0)
@@ -131,18 +145,18 @@ class EstimateMismatchCheck:
 
         if planned <= 0 or actual <= 0:
             return []
-        if max(planned, actual) < self.MIN_ROWS:
+        if max(planned, actual) < self.min_rows:
             return []
 
         ratio = max(planned, actual) / min(planned, actual)
-        if ratio <= self.THRESHOLD_RATIO:
+        if ratio <= self.threshold_ratio:
             return []
 
         node_type = node.get("Node Type", "")
         return [
             Issue(
                 severity=SEVERITY_WARNING,
-                type=self.name,
+                type=self.type,
                 message=(
                     f"Planner misestimated cardinality on '{node_type}': "
                     f"expected {planned}, got {actual} (ratio x{ratio:.1f}). "
@@ -161,7 +175,11 @@ class DiskSpillSortCheck:
     up runtime parameters.
     """
 
-    name = "disk_spill_sort"
+    name = "DiskSpillSortCheck"
+    type = "disk_spill_sort"
+
+    def __init__(self, min_spill_kb: int = 0) -> None:
+        self.min_spill_kb = min_spill_kb
 
     def check(self, node: dict[str, Any]) -> list[Issue]:
         method = node.get("Sort Method", "")
@@ -175,7 +193,7 @@ class DiskSpillSortCheck:
             return [
                 Issue(
                     severity=SEVERITY_WARNING,
-                    type=self.name,
+                    type=self.type,
                     message="Sort spilled to disk. Increase work_mem.",
                     node="Sort",
                 )
@@ -190,7 +208,7 @@ class DiskSpillSortCheck:
         return [
             Issue(
                 severity=SEVERITY_WARNING,
-                type=self.name,
+                type=self.type,
                 message=(
                     f"Sort spilled to disk ({used}kB ≈ {size_mb:.1f} MB). "
                     f"Recommended fix: set work_mem to at least {size_mb:.0f} MB; "
@@ -224,7 +242,11 @@ class DiskSpillHashCheck:
     The caller is expected to look it up via ``list_parameters``.
     """
 
-    name = "disk_spill_hash"
+    name = "DiskSpillHashCheck"
+    type = "disk_spill_hash"
+
+    def __init__(self, min_batches: int = 2) -> None:
+        self.min_batches = min_batches
 
     def check(self, node: dict[str, Any]) -> list[Issue]:
         batches = node.get("Hash Batches", 1)
@@ -250,7 +272,7 @@ class DiskSpillHashCheck:
         return [
             Issue(
                 severity=SEVERITY_WARNING,
-                type=self.name,
+                type=self.type,
                 message=(
                     f"Hash operation spilled to disk{parallel_note}: {details}. "
                     "To keep the hash table in memory, set work_mem such that "
@@ -277,8 +299,16 @@ class NestedLoopCheck:
     reported separately by ``EstimateMismatchCheck``.
     """
 
-    name = "nested_loop"
-    THRESHOLD_LOOPS = 1000
+    name = "NestedLoopCheck"
+    type = "nested_loop"
+
+    def __init__(
+        self,
+        threshold_loops: int = 1000,
+        threshold_rows: int = 100000,
+    ) -> None:
+        self.threshold_loops = threshold_loops
+        self.threshold_rows = threshold_rows
 
     def check(self, node: dict[str, Any]) -> list[Issue]:
         if node.get("Node Type") != "Nested Loop":
@@ -290,7 +320,7 @@ class NestedLoopCheck:
 
         inner = plans[1]
         loops = inner.get("Actual Loops", 1)
-        if loops <= self.THRESHOLD_LOOPS:
+        if loops <= self.threshold_loops:
             return []
 
         inner_type = inner.get("Node Type", "?")
@@ -300,7 +330,7 @@ class NestedLoopCheck:
         return [
             Issue(
                 severity=SEVERITY_INFO,
-                type=self.name,
+                type=self.type,
                 message=(
                     f"Nested Loop ran the inner side {loops} times "
                     f"('{inner_type}' on '{inner_relation}', ~{inner_avg:.2f} "
@@ -320,22 +350,25 @@ class BitmapHeapScanCheck:
     composite index, poor selectivity, or a bloated bitmap.
     """
 
-    name = "bitmap_heap_scan"
-    THRESHOLD_ROWS = 100_000
+    name = "BitmapHeapScanCheck"
+    type = "bitmap_heap_scan"
+
+    def __init__(self, threshold_rows: int = 100000) -> None:
+        self.threshold_rows = threshold_rows
 
     def check(self, node: dict[str, Any]) -> list[Issue]:
         if node.get("Node Type") != "Bitmap Heap Scan":
             return []
 
         rows = node.get("Actual Rows", 0)
-        if rows <= self.THRESHOLD_ROWS:
+        if rows <= self.threshold_rows:
             return []
 
         relation = node.get("Relation Name", "?")
         return [
             Issue(
                 severity=SEVERITY_INFO,
-                type=self.name,
+                type=self.type,
                 message=(
                     f"Bitmap Heap Scan on '{relation}' processed {rows} rows. "
                     "Consider a composite index or partitioning to reduce "
@@ -361,16 +394,18 @@ class IndexScanCheck:
        scattered, causing random I/O. Fix: ``CLUSTER`` on the index used.
     """
 
-    name = "index_scan_heap_locality"
+    name = "IndexScanCheck"
+    type = "index_scan_heap_locality"
 
-    # Minimum absolute threshold to avoid noise on small scans.
-    MIN_ROWS = 1000
-
-    # Index Only Scan: ratio of heap fetches to actual rows above which we warn.
-    HEAP_FETCH_RATIO = 0.10  # 10%
-
-    # Index Scan: minimum disk blocks read to trigger a warning.
-    MIN_DISK_BLOCKS = 100
+    def __init__(
+        self,
+        min_rows: int = 1000,
+        heap_fetch_ratio: float = 0.10,
+        min_disk_blocks: int = 100,
+    ) -> None:
+        self.min_rows = min_rows
+        self.heap_fetch_ratio = heap_fetch_ratio
+        self.min_disk_blocks = min_disk_blocks
 
     def check(self, node: dict[str, Any]) -> list[Issue]:
         node_type = node.get("Node Type", "")
@@ -389,9 +424,9 @@ class IndexScanCheck:
         heap_fetches = node.get("Heap Fetches", 0)
         actual_rows = node.get("Actual Rows", 0)
 
-        if heap_fetches < self.MIN_ROWS:
+        if heap_fetches < self.min_rows:
             return []
-        if actual_rows > 0 and heap_fetches / actual_rows < self.HEAP_FETCH_RATIO:
+        if actual_rows > 0 and heap_fetches / actual_rows < self.heap_fetch_ratio:
             return []
 
         index_name = node.get("Index Name", "?")
@@ -401,7 +436,7 @@ class IndexScanCheck:
         return [
             Issue(
                 severity=SEVERITY_WARNING,
-                type=self.name,
+                type=self.type,
                 message=(
                     f"Index Only Scan on '{index_name}' ({relation}) "
                     f"performed {heap_fetches} heap fetches for {actual_rows} rows "
@@ -416,9 +451,9 @@ class IndexScanCheck:
         actual_rows = node.get("Actual Rows", 0)
         read_blocks = node.get("Shared Read Blocks", 0)
 
-        if actual_rows < self.MIN_ROWS:
+        if actual_rows < self.min_rows:
             return []
-        if read_blocks < self.MIN_DISK_BLOCKS:
+        if read_blocks < self.min_disk_blocks:
             return []
 
         index_name = node.get("Index Name", "?")
@@ -427,7 +462,7 @@ class IndexScanCheck:
         return [
             Issue(
                 severity=SEVERITY_INFO,
-                type=self.name,
+                type=self.type,
                 message=(
                     f"Index Scan on '{index_name}' ({relation}) read "
                     f"{read_blocks} blocks from disk for {actual_rows} rows. "
@@ -437,21 +472,6 @@ class IndexScanCheck:
                 node="Index Scan",
             )
         ]
-
-
-# ---------------------------------------------------------------------------
-# Registry
-# ---------------------------------------------------------------------------
-
-DEFAULT_CHECKS: tuple[PlanCheck, ...] = (
-    SeqScanCheck(),
-    EstimateMismatchCheck(),
-    DiskSpillSortCheck(),
-    DiskSpillHashCheck(),
-    NestedLoopCheck(),
-    BitmapHeapScanCheck(),
-    IndexScanCheck(),
-)
 
 
 # ---------------------------------------------------------------------------
@@ -474,7 +494,7 @@ def _walk_plan(
 
 def analyze_plan(
     plan_json: list[dict[str, Any]],
-    checks: tuple[PlanCheck, ...] = DEFAULT_CHECKS,
+    checks: tuple[PlanCheck, ...],
 ) -> dict[str, Any]:
     """Analyze a JSON execution plan and return a structured report.
 

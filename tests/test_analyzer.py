@@ -1,7 +1,6 @@
 """Unit tests for the plan analyzer."""
 
 from pg_explain_mcp.analyzer import (
-    DEFAULT_CHECKS,
     BitmapHeapScanCheck,
     DiskSpillHashCheck,
     DiskSpillSortCheck,
@@ -13,6 +12,7 @@ from pg_explain_mcp.analyzer import (
     summarize_plan_node,
 )
 from pg_explain_mcp.server import _format_indexes, _format_params
+from tests.conftest import ALL_CHECKS
 
 # ---------------------------------------------------------------------------
 # Individual checks
@@ -436,7 +436,7 @@ class TestFormatParams:
 
 class TestAnalyzePlan:
     def test_empty_plan(self):
-        result = analyze_plan([])
+        result = analyze_plan([], checks=())
         assert result["issues"] == []
         assert result["summary"] == "Empty plan"
 
@@ -448,7 +448,7 @@ class TestAnalyzePlan:
                 "Planning Time": 0.1,
             }
         ]
-        result = analyze_plan(plan)
+        result = analyze_plan(plan, checks=ALL_CHECKS)
         assert result["issue_count"] == 0
         assert "No issues found" in result["summary"]
         assert result["total_time_ms"] == 0.6
@@ -467,7 +467,7 @@ class TestAnalyzePlan:
                 "Planning Time": 1.0,
             }
         ]
-        result = analyze_plan(plan)
+        result = analyze_plan(plan, checks=ALL_CHECKS)
         assert result["issue_count"] == 1
         assert result["issues"][0]["type"] == "seq_scan"
 
@@ -495,7 +495,7 @@ class TestAnalyzePlan:
                 "Planning Time": 0.5,
             }
         ]
-        result = analyze_plan(plan)
+        result = analyze_plan(plan, checks=ALL_CHECKS)
         assert result["issue_count"] == 2
 
     def test_custom_checks_registry(self):
@@ -508,7 +508,6 @@ class TestAnalyzePlan:
         ]
         result = analyze_plan(plan, checks=())
         assert result["issue_count"] == 0
-        assert len(DEFAULT_CHECKS) > 0
 
     def test_plan_with_bitmap_heap_scan(self):
         plan = [
@@ -523,7 +522,7 @@ class TestAnalyzePlan:
                 "Planning Time": 2.0,
             }
         ]
-        result = analyze_plan(plan)
+        result = analyze_plan(plan, checks=ALL_CHECKS)
         assert result["issue_count"] == 1
         assert result["issues"][0]["type"] == "bitmap_heap_scan"
 
@@ -542,7 +541,7 @@ class TestAnalyzePlan:
                 "Planning Time": 1.5,
             }
         ]
-        result = analyze_plan(plan)
+        result = analyze_plan(plan, checks=ALL_CHECKS)
         assert result["issue_count"] == 1
         assert result["issues"][0]["type"] == "index_scan_heap_locality"
 

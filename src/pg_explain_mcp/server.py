@@ -5,10 +5,12 @@ import json
 from mcp.server.fastmcp import FastMCP
 
 from pg_explain_mcp.analyzer import analyze_plan, summarize_plan_node
+from pg_explain_mcp.config import DEFAULT_DB, CheckRegistry
 from pg_explain_mcp.db import explain_query, get_indexes, get_params, get_schema
 
-mcp = FastMCP("pg-explain")
+_registry = CheckRegistry(DEFAULT_DB)
 
+mcp = FastMCP("pg-explain")
 
 def _format_indexes(rows: list[dict[str, any]]) -> str:
     """Format index rows into a human-readable string."""
@@ -107,7 +109,8 @@ def explain(sql: str) -> str:
         root = plan_json[0]
         plan_tree = root.get("Plan", {})
 
-        report = analyze_plan(plan_json)
+        checks = _registry.load()   # fresh on every call
+        report = analyze_plan(plan_json, checks=checks)
         report["plan_nodes"] = summarize_plan_node(plan_tree)
 
         return json.dumps(report, indent=2, ensure_ascii=False)

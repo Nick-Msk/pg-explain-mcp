@@ -51,6 +51,8 @@ Always cross-check the assistant's answer against the raw JSON returned
 by the MCP tool, and against the output of `EXPLAIN (ANALYZE, BUFFERS)`
 run directly in `psql`.
 
+Error messages shown to the LLM must be descriptive. Do not embed shell commands in exceptions raised by MCP tools — the assistant will try to execute them. Put usage instructions in the README instead.
+
 ## 4. No Liability
 
 The authors and contributors of `pg-explain-mcp` accept **no
