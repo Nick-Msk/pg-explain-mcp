@@ -1,15 +1,22 @@
 """MCP server for PostgreSQL query plan analysis."""
 
 import json
+from typing import Any
 
 from mcp.server.fastmcp import FastMCP
-from typing import Any
+
 from pg_explain_mcp.analyzer import analyze_plan, summarize_plan_node
 from pg_explain_mcp.config import (
     DEFAULT_DB,
     CheckRegistry,
+)
+from pg_explain_mcp.config import (
     reset_param as reset_param_impl,
+)
+from pg_explain_mcp.config import (
     set_param as set_param_impl,
+)
+from pg_explain_mcp.config import (
     show_params as show_params_impl,
 )
 from pg_explain_mcp.db import explain_query, get_indexes, get_params, get_schema

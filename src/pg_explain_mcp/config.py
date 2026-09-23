@@ -209,11 +209,23 @@ def reset_param(
 
     return changes
 
-def _ensure_db(db_path: Path) -> None:
-    """Ensure the config DB exists *and* has the expected schema.
+# Columns that must exist. If any is missing, the file is stale and
+# gets rebuilt. Keep this list in sync with schema.sql.
+_REQUIRED_COLUMNS: dict[str, set[str]] = {
+    "databases":    {"database"},
+    "checks":       {"num", "database", "name", "description", "enabled"},
+    "check_params": {"num", "database", "param", "value", "default_value"},
+    "plan_fields":  {"database", "raw", "key", "enabled"},
+}
 
-    - If the file is missing → build it.
-    - If the file exists but the schema is absent or broken → rebuild.
+
+def _ensure_db(db_path: Path) -> None:
+    """Ensure the config DB exists *and* matches the expected schema.
+
+    Checks both that the required tables are present and that each
+    table carries the required columns. If anything is missing — the
+    file is stale, empty, or corrupted — it is rebuilt from
+    ``schema.sql`` and ``seed.sql``.
     """
     if not db_path.exists():
         init_db(db_path)
@@ -221,11 +233,17 @@ def _ensure_db(db_path: Path) -> None:
 
     try:
         with sqlite3.connect(db_path) as conn:
-            conn.execute("select 1 from databases limit 1").fetchone()
-            conn.execute("select 1 from checks    limit 1").fetchone()
-            conn.execute("select 1 from plan_fields limit 1").fetchone()
+            for table, required in _REQUIRED_COLUMNS.items():
+                rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+                if not rows:
+                    raise sqlite3.OperationalError(f"missing table: {table}")
+                present = {r[1] for r in rows}
+                missing = required - present
+                if missing:
+                    raise sqlite3.OperationalError(
+                        f"table {table} missing columns: {sorted(missing)}"
+                    )
     except sqlite3.OperationalError:
-        # Missing tables — stale or corrupted file. Rebuild.
         init_db(db_path)
 
 def load_checks(
