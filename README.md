@@ -47,18 +47,9 @@ produced by an independent, pluggable `PlanCheck`:
 | `EstimateMismatchCheck`  | Planner cardinality misestimate                        |
 
 To add a new check, implement the `PlanCheck` protocol in
-`src/pg_explain_mcp/analyzer.py` and register the instance in
-`DEFAULT_CHECKS`. No changes to `server.py` or the traversal logic are
-required.
-
-Checks are loaded from a SQLite config database at
-`config/checks.db`. Enable, disable, or retune them without touching
-the code:
-
-```bash
-python -m pg_explain_mcp.config --init       # create / rebuild from seed
-sqlite3 config/checks.db \
-  "update checks set enabled = 0 where name = 'NestedLoopCheck';"
+`src/pg_explain_mcp/analyzer.py`, register the class in
+`src/pg_explain_mcp/config.py`, and add its default parameters to
+`config/seed.sql`.
 
 ### Structured plan output
 
@@ -72,12 +63,11 @@ Only the fields that matter for reasoning are kept:
 - `hash_buckets`, `hash_batches`, `peak_memory_usage_kb`
 - `parallel_aware`
 
-This lets the assistant reason about the plan without guessing, and
-prevents hallucinations such as inventing node types or statistics.
+The list of fields is configurable — see [Configuration](#configuration).
 
 ## Installation
 
-Requires Python 3.10+ and `pg_config` in `PATH`.
+Requires Python 3.10+.
 
 ```bash
 git clone https://github.com/Nick-Msk/pg-explain-mcp.git
@@ -104,7 +94,10 @@ pytest -v
 
 ## Configuration
 
-The server reads connection parameters from environment variables:
+### Connection
+
+The server reads PostgreSQL connection parameters from environment
+variables:
 
 | Variable      | Default     | Description          |
 |---------------|-------------|----------------------|
@@ -113,6 +106,46 @@ The server reads connection parameters from environment variables:
 | `PG_USER`     | `postgres`  | Database user        |
 | `PG_PASSWORD` | —           | Database password    |
 | `PG_DATABASE` | `postgres`  | Database name        |
+
+### Check registry
+
+Enabled checks and their thresholds live in a small SQLite database at
+`config/checks.db`. The database is created automatically on first
+`explain` if missing, and rebuilt from scratch by an explicit `--init`:
+
+```bash
+python -m pg_explain_mcp.config --init   # rebuild from schema + seed
+python -m pg_explain_mcp.config --show   # print current state
+```
+
+Changes to the database take effect on the next `explain` call — no
+MCP server restart required. For example:
+
+```bash
+# Disable NestedLoopCheck without touching the code.
+sqlite3 config/checks.db \
+  "update checks set enabled = 0 where name = 'NestedLoopCheck';"
+
+# Raise SeqScanCheck's threshold from 1000 to 5000 rows.
+sqlite3 config/checks.db \
+  "update check_params set value = '5000'
+   where num = 1 and param = 'threshold_rows';"
+```
+
+The schema is multi-database ready (`checks` and `plan_fields` are
+keyed by `database`), but only `postgres` is currently populated. The
+`databases` table is the FK root — removing a row from it cascades to
+all of its checks, params, and plan fields.
+
+To extend the registry with a new field for `plan_nodes`:
+
+```bash
+sqlite3 config/checks.db \
+  "insert into plan_fields (database, raw, key, enabled)
+   values ('postgres', 'Total Cost', 'total_cost', 1);"
+```
+
+The new field appears in `plan_nodes` on the next `explain` call.
 
 ## Usage with Continue.dev
 
@@ -208,7 +241,9 @@ pg-explain-mcp/
 │       ├── __init__.py
 │       ├── server.py         # MCP entry point — exposes tools
 │       ├── db.py             # connection + EXPLAIN + schema queries
-│       └── analyzer.py       # PlanCheck adapters + traversal
+│       ├── analyzer.py       # PlanCheck adapters + traversal
+│       └── config.py         # SQLite-backed check registry
+├── config/                   # SQLite config: schema, seed, checks.db
 ├── tests/                    # unit tests for checks and helpers
 ├── fixtures/                 # mcp_explain_tool PostgreSQL extension
 ├── usage_examples/           # real-world runs, one set per check
@@ -223,15 +258,11 @@ pg-explain-mcp/
 
 ## Roadmap
 
-- **Configurable checks.** Move `PlanCheck` enable/disable flags and
-  thresholds into a small config file (SQLite or YAML), so users can
-  turn off checks that do not apply to their workload — for example,
-  `nested_loop` reports at `INFO` level and is useful on some setups
-  but noise on others.
 - **Additional checks** — `partition_pruning` for partitioned tables,
   `jit_decision` for expensive JIT compilation on short queries.
-- **Multi-database support** — the `PlanCheck` interface is
-  database-agnostic in principle; currently PostgreSQL-only.
+- **Multi-database support** — the `PlanCheck` interface and the
+  SQLite config are database-agnostic in principle; the next step is
+  a MySQL/MariaDB adapter and its own `plan_fields`/`checks` rows.
 
 ## Disclaimer
 
@@ -247,3 +278,4 @@ See [`DISCLAIMER.md`](DISCLAIMER.md) for the full text.
 ## License
 
 MIT — see [`LICENSE`](LICENSE) for details.
+

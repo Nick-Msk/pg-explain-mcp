@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **SQLite-backed check configuration.**
+  `CheckRegistry.load()` reads the list of enabled checks and their
+  parameters from `config/checks.db`. Edits to the database take effect
+  on the next `explain` call — no MCP server restart is required.
+  - `config/schema.sql` declares the tables: `databases`, `checks`,
+    `check_params`, `plan_fields`.
+  - `config/seed.sql` populates the default registry for `postgres`.
+  - `python -m pg_explain_mcp.config --init` rebuilds the database
+    from schema and seed; `--show` prints the current state.
+  - The database is created automatically on first `load()` if missing,
+    and rebuilt automatically if the schema is corrupted.
+  - Checks and plan fields are keyed by `(num, database)` and
+    `(database, raw)` respectively — the schema is multi-database
+    ready, currently populated only for `postgres`.
+
+- **`plan_fields` — configurable plan node serialization.**
+  `summarize_plan_node` now takes its raw→key mapping from
+  `plan_fields` instead of a hard-coded `_PLAN_FIELDS` dictionary.
+  Fields can be toggled or renamed from SQL without touching the code.
+
+- **`checks_applied` in the `explain` output.**
+  Every report now lists the names of the checks that actually ran.
+  This lets the assistant distinguish "no issue found" from "the
+  relevant check is disabled in the configuration" instead of
+  speculating about thresholds.
+
+### Changed
+
+- **`PlanCheck` constructors take thresholds as arguments.**
+  Module-level constants (`THRESHOLD_ROWS`, `MIN_FILTER_RATIO`,
+  `MIN_ROWS`, `HEAP_FETCH_RATIO`, ...) have been removed. Defaults in
+  `__init__` preserve v0.2.0 behaviour for callers that instantiate
+  checks directly.
+- **`DEFAULT_CHECKS` removed** from `analyzer.py`. The SQLite registry
+  is now the single source of truth. Tests use
+  `tests/conftest.ALL_CHECKS` instead.
+- **`analyze_plan` requires `checks` explicitly.** The argument is no
+  longer optional — there is no fallback registry.
+- **Check classes carry both `name` and `type`:**
+  - `name` (e.g. `"SeqScanCheck"`) matches the SQLite key and the
+    Python class name.
+  - `type` (e.g. `"seq_scan"`) is what appears in the JSON
+    `issues[].type` field. Existing documentation and examples use
+    the `snake_case` form.
+
+### Fixed
+
+- `python -m pg_explain_mcp.config --init` is now idempotent —
+  re-running drops and rebuilds `checks.db` instead of failing on
+  UNIQUE constraint violations.
+
 ## [0.2.0] — 2026-09-23
 
 ### Added
@@ -159,28 +212,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The analyzer enforces read-only access at the transaction level.
 - `mcp` dependency is pinned to `<2.0.0` for SDK compatibility.
-
-### Added
-
-- **SQLite-backed check configuration.**
-  `CheckRegistry.load()` reads the list of enabled checks and their
-  parameters from `config/checks.db`. Edits to the database take effect
-  on the next `explain` call — no restart required.
-  - `python -m pg_explain_mcp.config --init` builds the database from
-    `config/schema.sql` and `config/seed.sql`.
-  - Checks keyed by `(num, database)` — multi-database ready, currently
-    populated only for `postgres`.
-
-### Changed
-
-- **`PlanCheck` constructors take thresholds as arguments.**
-  Module-level constants (`THRESHOLD_ROWS`, `MIN_FILTER_RATIO`, ...)
-  removed. Defaults in `__init__` preserve v0.2.0 behaviour.
-- **`DEFAULT_CHECKS` removed** from `analyzer.py`. The SQLite registry
-  is the single source of truth. Tests use `tests/conftest.ALL_CHECKS`.
-- **Check classes now have both `name` and `type`:**
-  - `name` (e.g. `"SeqScanCheck"`) matches the SQLite key.
-  - `type` (e.g. `"seq_scan"`) is what appears in the JSON `issues`.
 
 [Unreleased]: https://github.com/Nick-Msk/pg-explain-mcp/compare/v0.2.0...HEAD
 [0.2.0]: https://github.com/Nick-Msk/pg-explain-mcp/compare/v0.1.0...v0.2.0
