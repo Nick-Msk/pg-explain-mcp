@@ -1,6 +1,7 @@
 """SQLite-backed configuration for the PlanCheck registry."""
 
 import sqlite3
+import sys
 from pathlib import Path
 from typing import Any, Callable
 
@@ -58,12 +59,14 @@ def load_checks(
 
     Checks are returned ordered by ``num`` — the order in the seed file.
     Params are coerced to the Python type declared in ``_REGISTRY``.
+
+    If the config database does not exist, it is created from
+    ``config/schema.sql`` and ``config/seed.sql`` before loading.
     """
+
     db_path = Path(db_path)
     if not db_path.exists():
-        raise FileNotFoundError(
-            f"Config database not found: {db_path}. "
-        )
+        init_db(db_path)
 
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
@@ -116,11 +119,22 @@ class CheckRegistry:
     def load(self) -> tuple[PlanCheck, ...]:
         return load_checks(self._database, self._db_path)
 
-
 def init_db(db_path: Path | str = DEFAULT_DB) -> None:
-    """Create or rebuild the config database from schema.sql and seed.sql."""
+    """Create or rebuild the config database from schema.sql and seed.sql.
+
+    If the database file already exists, it is removed and rebuilt from
+    scratch — the seed file contains plain ``insert`` statements, so
+    re-running against an existing schema would violate constraints.
+    """
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Remove the old file, if any. Safe on macOS/Linux even if a running
+    # process still has the file open — the old inode stays alive until
+    # that process closes it, and the next `load()` will pick up the new
+    # file by path.
+    if db_path.exists():
+        db_path.unlink()
 
     schema = (_CONFIG_DIR / "schema.sql").read_text()
     seed = (_CONFIG_DIR / "seed.sql").read_text()
@@ -129,14 +143,39 @@ def init_db(db_path: Path | str = DEFAULT_DB) -> None:
         conn.executescript(schema)
         conn.executescript(seed)
 
-    print(f"Initialized {db_path}")
-
+    # stderr — MCP uses stdout for JSON-RPC framing.
+    print(f"Initialized {db_path}", file=sys.stderr)
 
 if __name__ == "__main__":
-    import sys
+    import argparse
 
-    if len(sys.argv) > 1 and sys.argv[1] == "--init":
+    parser = argparse.ArgumentParser(
+        prog="python -m pg_explain_mcp.config",
+        description="Manage the SQLite check registry for pg-explain-mcp.",
+    )
+    parser.add_argument(
+        "--init",
+        action="store_true",
+        help="Rebuild config/checks.db from schema.sql and seed.sql.",
+    )
+    parser.add_argument(
+        "--show",
+        action="store_true",
+        help="Print the current registry as a table and exit.",
+    )
+    args = parser.parse_args()
+
+    if args.init:
         init_db()
+    elif args.show:
+        with sqlite3.connect(DEFAULT_DB) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "select num, database, name, enabled from checks order by num"
+            ).fetchall()
+            for r in rows:
+                mark = "on " if r["enabled"] else "off"
+                print(f"{r['num']:>2}  [{mark}]  {r['name']}")
     else:
-        print("Usage: python -m pg_explain_mcp.config --init")
+        parser.print_help()
 
