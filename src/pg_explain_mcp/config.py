@@ -50,6 +50,24 @@ _REGISTRY: dict[str, tuple[type, dict[str, Callable[[str], Any]]]] = {
     }),
 }
 
+def _ensure_db(db_path: Path) -> None:
+    """Ensure the config DB exists *and* has the expected schema.
+
+    - If the file is missing → build it.
+    - If the file exists but the schema is absent or broken → rebuild.
+    """
+    if not db_path.exists():
+        init_db(db_path)
+        return
+
+    try:
+        with sqlite3.connect(db_path) as conn:
+            conn.execute("select 1 from databases limit 1").fetchone()
+            conn.execute("select 1 from checks    limit 1").fetchone()
+            conn.execute("select 1 from plan_fields limit 1").fetchone()
+    except sqlite3.OperationalError:
+        # Missing tables — stale or corrupted file. Rebuild.
+        init_db(db_path)
 
 def load_checks(
     database: str = "postgres",
@@ -65,8 +83,7 @@ def load_checks(
     """
 
     db_path = Path(db_path)
-    if not db_path.exists():
-        init_db(db_path)
+    _ensure_db(db_path)
 
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
@@ -119,6 +136,9 @@ class CheckRegistry:
     def load(self) -> tuple[PlanCheck, ...]:
         return load_checks(self._database, self._db_path)
 
+    def load_fields(self) -> dict[str, str]:
+        return load_plan_fields(self._database, self._db_path)
+
 def init_db(db_path: Path | str = DEFAULT_DB) -> None:
     """Create or rebuild the config database from schema.sql and seed.sql.
 
@@ -143,8 +163,39 @@ def init_db(db_path: Path | str = DEFAULT_DB) -> None:
         conn.executescript(schema)
         conn.executescript(seed)
 
-    # stderr — MCP uses stdout for JSON-RPC framing.
-    print(f"Initialized {db_path}", file=sys.stderr)
+        # Sanity check: schema and seed must produce a non-empty registry.
+        n_checks = conn.execute("select count(*) from checks").fetchone()[0]
+        n_fields = conn.execute("select count(*) from plan_fields").fetchone()[0]
+        if n_checks == 0 or n_fields == 0:
+            raise RuntimeError(
+                f"Seed produced {n_checks} checks / {n_fields} plan fields "
+                f"— check {_CONFIG_DIR}/seed.sql"
+            )
+
+    print(
+        f"Initialized {db_path} ({n_checks} checks, {n_fields} fields)",
+        file=sys.stderr,
+    )
+
+def load_plan_fields(
+    database: str = "postgres",
+    db_path: Path | str = DEFAULT_DB,
+) -> dict[str, str]:
+    """Return the raw→key mapping for ``plan_nodes`` output.
+
+    Loaded from ``plan_fields``. If the database is missing, it is
+    created from ``schema.sql`` and ``seed.sql`` first.
+    """
+    db_path = Path(db_path)
+    _ensure_db(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            "select raw, key from plan_fields "
+            "where database = ? and enabled = 1",
+            (database,),
+        ).fetchall()
+        return {raw: key for raw, key in rows}
 
 if __name__ == "__main__":
     import argparse
@@ -170,12 +221,23 @@ if __name__ == "__main__":
     elif args.show:
         with sqlite3.connect(DEFAULT_DB) as conn:
             conn.row_factory = sqlite3.Row
-            rows = conn.execute(
-                "select num, database, name, enabled from checks order by num"
-            ).fetchall()
-            for r in rows:
+            print("databases:")
+            for r in conn.execute("select database from databases order by database"):
+                print(f"  {r['database']}")
+            print("checks:")
+            for r in conn.execute(
+                "select num, database, name, enabled from checks "
+                "order by database, num"
+            ):
                 mark = "on " if r["enabled"] else "off"
-                print(f"{r['num']:>2}  [{mark}]  {r['name']}")
+                print(f"  {r['database']}  {r['num']:>2}  [{mark}]  {r['name']}")
+            print("plan fields:")
+            for r in conn.execute(
+                "select database, raw, key, enabled from plan_fields "
+                "order by database, raw"
+            ):
+                mark = "on " if r["enabled"] else "off"
+                print(f"  {r['database']}  [{mark}]  {r['raw']!r} → {r['key']!r}")
     else:
         parser.print_help()
 

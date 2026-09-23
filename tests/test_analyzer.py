@@ -153,11 +153,6 @@ class TestDiskSpillSortCheck:
         issues = DiskSpillSortCheck().check(node)
         assert len(issues) == 1
 
-    def test_key_order_is_stable(self):
-        node = {"Node Type": "Seq Scan", "Relation Name": "t"}
-        result = summarize_plan_node(node)
-        keys = list(result[0].keys())
-        assert keys[:2] == ["depth", "node_type"]
     def test_message_contains_absolute_value(self):
         node = {
             "Node Type": "Sort",
@@ -363,8 +358,17 @@ class TestIndexScanCheck:
         assert IndexScanCheck().check({"Node Type": "Index Only Scan"}) == []
         assert IndexScanCheck().check({}) == []
 
-
 class TestSummarizePlanNode:
+    FIELDS = {
+        "Relation Name":  "relation",
+        "Index Name":     "index",
+        "Actual Rows":    "actual_rows",
+        "Actual Loops":   "actual_loops",
+        "Plan Rows":      "plan_rows",
+        "Parallel Aware": "parallel_aware",
+        "Sort Method":    "sort_method",
+    }
+
     def test_simple_node(self):
         node = {
             "Node Type": "Seq Scan",
@@ -372,7 +376,7 @@ class TestSummarizePlanNode:
             "Actual Rows": 5000,
             "Plan Rows": 4800,
         }
-        result = summarize_plan_node(node)
+        result = summarize_plan_node(node, self.FIELDS)
         assert len(result) == 1
         assert result[0]["node_type"] == "Seq Scan"
         assert result[0]["relation"] == "orders"
@@ -387,20 +391,37 @@ class TestSummarizePlanNode:
                 {"Node Type": "Index Scan", "Index Name": "idx_b", "Actual Rows": 50},
             ],
         }
-        result = summarize_plan_node(node)
+        result = summarize_plan_node(node, self.FIELDS)
         assert len(result) == 3
         assert result[0]["node_type"] == "Hash Join"
-        assert result[0]["depth"] == 0
         assert result[1]["depth"] == 1
         assert result[2]["depth"] == 1
         assert result[2]["index"] == "idx_b"
 
     def test_optional_fields_are_skipped(self):
         node = {"Node Type": "Limit", "Actual Rows": 10}
-        result = summarize_plan_node(node)
+        result = summarize_plan_node(node, self.FIELDS)
         assert "relation" not in result[0]
         assert "index" not in result[0]
         assert "heap_fetches" not in result[0]
+
+    def test_unknown_fields_in_mapping_are_ignored(self):
+        """Fields in the mapping that aren't in the node don't appear."""
+        node = {"Node Type": "Seq Scan"}
+        fields = {"This Field Does Not Exist": "nonexistent"}
+        result = summarize_plan_node(node, fields)
+        assert result[0] == {"depth": 0, "node_type": "Seq Scan"}
+
+    def test_empty_mapping_returns_only_header(self):
+        node = {"Node Type": "Seq Scan", "Actual Rows": 5000}
+        result = summarize_plan_node(node, {})
+        assert result == [{"depth": 0, "node_type": "Seq Scan"}]
+
+    def test_key_order_is_stable(self):
+        node = {"Node Type": "Seq Scan", "Relation Name": "t"}
+        result = summarize_plan_node(node, self.FIELDS)
+        keys = list(result[0].keys())
+        assert keys[:2] == ["depth", "node_type"]
 
 class TestFormatParams:
     def test_empty_list(self):

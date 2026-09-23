@@ -538,45 +538,32 @@ def _make_summary(issues: list[Issue], exec_time: float) -> str:
         f"Execution time: {exec_time:.2f} ms."
     )
 
-
-# Mapping: EXPLAIN JSON field → key in our compact output.
-# Order matters only for readability; lookup is by key.
-_PLAN_FIELDS: dict[str, str] = {
-    "Relation Name":          "relation",
-    "Index Name":             "index",
-    "Actual Rows":            "actual_rows",
-    "Actual Loops":           "actual_loops",
-    "Plan Rows":              "plan_rows",
-    "Rows Removed by Filter": "rows_removed_by_filter",
-    "Heap Fetches":           "heap_fetches",
-    "Shared Read Blocks":     "shared_read_blocks",
-    "Sort Method":            "sort_method",
-    "Sort Space Type":        "sort_space_type",
-    "Sort Space Used":        "sort_space_used_kb",
-    "Hash Buckets":           "hash_buckets",
-    "Hash Batches":           "hash_batches",
-    "Peak Memory Usage":      "peak_memory_usage_kb",
-    "Disk Usage":             "disk_usage_kb",
-    "Parallel Aware":         "parallel_aware",
-}
-
-def summarize_plan_node(node: dict[str, Any], depth: int = 0) -> list[dict[str, Any]]:
+def summarize_plan_node(
+    node: dict[str, Any],
+    fields: dict[str, str],
+    depth: int = 0,
+) -> list[dict[str, Any]]:
     """Flatten a plan tree into a compact list of nodes.
 
-    Each entry keeps only the fields listed in ``_PLAN_FIELDS`` plus
-    ``depth`` and ``node_type``. Unknown fields are ignored — the goal
-    is to give the LLM the small set of values that matter for
-    reasoning, not the entire plan.
+    ``fields`` maps EXPLAIN JSON field names to compact output keys
+    (for example ``"Relation Name" -> "relation"``). The mapping is
+    loaded from the ``plan_fields`` table in the SQLite config, so
+    users can toggle or rename fields without touching the code.
+
+    Only fields present in both the mapping and the node are kept.
+    Unknown fields are ignored — the goal is to give the LLM the small
+    set of values that matter for reasoning, not the entire plan.
     """
     entry: dict[str, Any] = {
         "depth": depth,
         "node_type": node.get("Node Type", "?"),
     }
-    for src, dst in _PLAN_FIELDS.items():
-        if src in node:
-            entry[dst] = node[src]
+    for raw, key in fields.items():
+        if raw in node:
+            entry[key] = node[raw]
 
     result = [entry]
     for child in node.get("Plans", []):
-        result.extend(summarize_plan_node(child, depth + 1))
+        result.extend(summarize_plan_node(child, fields, depth + 1))
     return result
+

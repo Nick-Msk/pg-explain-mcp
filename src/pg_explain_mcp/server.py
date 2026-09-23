@@ -110,8 +110,10 @@ def explain(sql: str) -> str:
         plan_tree = root.get("Plan", {})
 
         checks = _registry.load()   # fresh on every call
+        fields = _registry.load_fields() # fresh on every call
+
         report = analyze_plan(plan_json, checks=checks)
-        report["plan_nodes"] = summarize_plan_node(plan_tree)
+        report["plan_nodes"] = summarize_plan_node(plan_tree, fields)
 
         return json.dumps(report, indent=2, ensure_ascii=False)
     except ValueError as e:

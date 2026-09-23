@@ -1,4 +1,10 @@
--- Default registry. Loaded by `--init`. Re-running `--init` rebuilds from scratch.
+-- Default registry. Loaded by `--init`. Re-running `--init` rebuilds
+-- the database from scratch.
+
+-- Parents first — every other table references this.
+
+insert into databases (database) values
+    ('postgres');
 
 insert into checks (num, database, name, description, enabled) values
     (1, 'postgres', 'SeqScanCheck',          'sequential scan that discards most rows',        1),
@@ -22,4 +28,22 @@ insert into check_params (num, database, param, value) values
     (7, 'postgres', 'min_rows',          '1000'),
     (7, 'postgres', 'heap_fetch_ratio',  '0.10'),
     (7, 'postgres', 'min_disk_blocks',   '100');
+
+insert into plan_fields (database, raw, key, enabled) values
+    ('postgres', 'Relation Name',          'relation',               1),
+    ('postgres', 'Index Name',             'index',                  1),
+    ('postgres', 'Actual Rows',            'actual_rows',            1),
+    ('postgres', 'Actual Loops',           'actual_loops',           1),
+    ('postgres', 'Plan Rows',              'plan_rows',              1),
+    ('postgres', 'Rows Removed by Filter', 'rows_removed_by_filter', 1),
+    ('postgres', 'Heap Fetches',           'heap_fetches',           1),
+    ('postgres', 'Shared Read Blocks',     'shared_read_blocks',     1),
+    ('postgres', 'Sort Method',            'sort_method',            1),
+    ('postgres', 'Sort Space Type',        'sort_space_type',        1),
+    ('postgres', 'Sort Space Used',        'sort_space_used_kb',     1),
+    ('postgres', 'Hash Buckets',           'hash_buckets',           1),
+    ('postgres', 'Hash Batches',           'hash_batches',           1),
+    ('postgres', 'Peak Memory Usage',      'peak_memory_usage_kb',   1),
+    ('postgres', 'Disk Usage',             'disk_usage_kb',          1),
+    ('postgres', 'Parallel Aware',         'parallel_aware',         1);
 
