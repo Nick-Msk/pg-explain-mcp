@@ -3,7 +3,7 @@
 import json
 
 from mcp.server.fastmcp import FastMCP
-
+from typing import Any
 from pg_explain_mcp.analyzer import analyze_plan, summarize_plan_node
 from pg_explain_mcp.config import (
     DEFAULT_DB,
@@ -126,6 +126,24 @@ def explain(sql: str) -> str:
         return f"Validation error: {e}"
     except Exception as e:
         return f"Execution error: {e}"
+
+def _format_params_table(rows: list[dict[str, Any]]) -> str:
+    """Format check params into an aligned text table.
+
+    A leading `*` marks params whose current value differs from the
+    default.
+    """
+    if not rows:
+        return "No params found."
+
+    lines = []
+    for r in rows:
+        marker = "*" if r["changed"] else " "
+        line = f"{marker} {r['checker']}.{r['param']} = {r['value']}"
+        if r["changed"]:
+            line += f"  (default: {r['default_value']})"
+        lines.append(line)
+    return "\n".join(lines)
 
 @mcp.tool()
 def show_params(checker: str | None = None) -> str:
