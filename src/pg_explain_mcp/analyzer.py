@@ -517,12 +517,13 @@ def analyze_plan(
     _walk_plan(plan_tree, issues, checks)
 
     return {
+        "checks_applied": [c.name for c in checks],
         "execution_time_ms": execution_time,
         "planning_time_ms": planning_time,
         "total_time_ms": execution_time + planning_time,
         "issues": [issue.to_dict() for issue in issues],
         "issue_count": len(issues),
-        "summary": _make_summary(issues, execution_time),
+        "summary": _make_summary(issues, execution_time)
     }
 
 

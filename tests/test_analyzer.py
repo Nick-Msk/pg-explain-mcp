@@ -545,6 +545,14 @@ class TestAnalyzePlan:
         assert result["issue_count"] == 1
         assert result["issues"][0]["type"] == "index_scan_heap_locality"
 
+    def test_checks_applied_is_present(self):
+        plan = [{
+            "Plan": {"Node Type": "Seq Scan", "Actual Rows": 100},
+            "Execution Time": 1.0,
+            "Planning Time": 0.1,
+        }]
+        result = analyze_plan(plan, checks=(SeqScanCheck(),))
+        assert result["checks_applied"] == ["SeqScanCheck"]
 
 # ---------------------------------------------------------------------------
 # list_indexes formatting

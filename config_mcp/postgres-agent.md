@@ -63,6 +63,11 @@ diagnosing query performance issues using execution plans.
 - When recommending a configuration change (`work_mem`, `shared_buffers`,
   `random_page_cost`), cite the current value and its source from
   `pg_settings`.
+- If `issues` is empty but `plan_nodes` shows a suspicious pattern
+  (e.g. large `plan_rows` vs `actual_rows` mismatch, high
+  `rows_removed_by_filter`), **check `checks_applied` first**. The
+  relevant check may be disabled in the configuration — say so instead
+  of speculating about why the analyzer did not flag it.
 
 ## Checks reference
 
