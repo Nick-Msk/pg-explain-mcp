@@ -169,17 +169,22 @@ def show_params(checker: str | None = None) -> str:
         return f"Error: {e}"
 
 @mcp.tool()
-def set_checker_value(checker: str, param: str, value: str) -> str:
+def set_checker_value(
+    checker: str,
+    param: str,
+    value: str | int | float,
+) -> str:
     """Set a check parameter's current value.
 
     Args:
         checker: Check name (e.g. ``SeqScanCheck``).
         param:   Parameter name (e.g. ``threshold_rows``).
-        value:   New value as a string.
+        value:   New value. Accepts string, int, or float; coerced to
+                 string internally before validation.
     """
     try:
         result = set_param_impl(
-            checker, param, value, database=_registry.target
+            checker, param, str(value), database=_registry.target
         )
         return (
             f"{result['checker']}.{result['param']}: "
