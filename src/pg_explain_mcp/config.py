@@ -314,10 +314,10 @@ class CheckRegistry:
         return TARGET_DB_TYPE
 
     def load(self) -> tuple[PlanCheck, ...]:
-        return load_checks(self._database, self._db_path)
+        return load_checks(TARGET_DB_TYPE, self._db_path)
 
     def load_fields(self) -> dict[str, str]:
-        return load_plan_fields(self._database, self._db_path)
+        return load_plan_fields(TARGET_DB_TYPE, self._db_path)
 
 def init_db(db_path: Path | str = DEFAULT_DB) -> None:
     """Create or rebuild the config database from schema.sql and seed.sql.
