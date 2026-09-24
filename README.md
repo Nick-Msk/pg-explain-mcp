@@ -158,6 +158,48 @@ Ready-to-use configuration files are available in
   — system prompt for an assistant that knows how to use `pg-explain`
   and a generic PostgreSQL MCP server, with per-check guidance.
 
+## Companion to `universal-db-mcp`
+
+`pg-explain-mcp` is designed to be used **alongside** a
+general-purpose PostgreSQL MCP server, not to replace it. In the
+reference setup we use
+[`universal-db-mcp`](https://github.com/Anarkh-Lee/universal-db-mcp)
+configured for the same database, and the two servers serve different
+purposes:
+
+| Server             | Purpose                                                 |
+|--------------------|---------------------------------------------------------|
+| `universal-db-mcp` | General SQL execution: `SELECT`, schema exploration, ad-hoc queries. |
+| `pg-explain-mcp`   | Plan analysis: `EXPLAIN ANALYZE`, structured bottleneck detection, index/parameter inspection. |
+
+The assistant decides which to call based on the question:
+
+- *"How many rows are in `orders`?"* → `universal-db-mcp`.
+- *"Why is this query slow?"* → `pg-explain-mcp`.
+
+All examples in [`usage_examples/`](usage_examples/) were captured with
+both servers loaded. The agent configuration in
+[`config_example/postgres-agent.md`](config_example/postgres-agent.md)
+describes both and includes guidance on when to prefer one over the
+other.
+
+### Why not use `pg-explain-mcp` alone?
+
+You can — the server is self-contained and exposes `list_tables` for
+schema inspection. Disabling `universal-db-mcp` is perfectly fine if
+you only care about plan analysis.
+
+In practice, however, mixing the two is more convenient: `pg-explain`'s
+`EXPLAIN ANALYZE` **actually executes** every query, which is expensive
+for large tables. For anything that does not need a plan — a row count,
+a lookup, a quick sanity check — `universal-db-mcp` runs the same query
+in read-only mode with much less overhead.
+
+The split also reduces the blast radius of an LLM mistake: a bad
+`SELECT` on `universal-db-mcp` is cheap, while a bad
+`EXPLAIN ANALYZE` on `pg-explain-mcp` can be expensive. Keeping the
+cheap path as the default makes the setup more robust.
+
 ### Setup
 
 1. Copy `config_example/mcpServers/pg-explain.yaml` into your
