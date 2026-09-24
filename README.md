@@ -289,7 +289,7 @@ pg-explain-mcp/
 ├── tests/                    # unit tests for checks and helpers
 ├── fixtures/                 # mcp_explain_tool PostgreSQL extension
 ├── usage_examples/           # real-world runs, one set per check
-├── config_example/           # Continue.dev MCP + agent config
+├── config_mcp/           # Continue.dev MCP + agent config
 ├── images/                   # screenshots
 ├── pyproject.toml
 ├── CHANGELOG.md
@@ -300,15 +300,52 @@ pg-explain-mcp/
 
 ## Roadmap
 
-- **Additional checks** — `partition_pruning` for partitioned tables,
-  `jit_decision` for expensive JIT compilation on short queries.
-- **Multi-database support** — the `PlanCheck` interface and the
-  SQLite config are database-agnostic in principle; the next step is
-  a MySQL/MariaDB adapter and its own `plan_fields`/`checks` rows
-  under `TARGET_DB_TYPE=mysql`.
-- **Audit log for config changes** — record every `set_checker_value`
-  and `reset_checker_value` call into a `param_history` table with
-  timestamp, old value, and new value. Useful in shared deployments.
+### Additional checks
+
+- `partition_pruning` — detect queries that scan partitioned tables
+  without pruning.
+- `jit_decision` — flag expensive JIT compilation on short queries.
+
+### Multi-database support
+
+The `PlanCheck` interface and the SQLite config are database-agnostic
+in principle. The next step is a MySQL/MariaDB adapter and its own
+`plan_fields` / `checks` rows under `TARGET_DB_TYPE=mysql`.
+
+### Database health checker
+
+A second MCP tool — `health_check` — that inspects the database as a
+whole instead of a single query. The same `PlanCheck` adapter pattern
+applies, but the scope moves from *"how does this plan look"* to
+*"is the database in good shape"*.
+
+Candidate checks, each independently toggleable via the same SQLite
+config:
+
+1. **Tablespace free space.** Warn when any tablespace (or the
+   default `pg_default`) has less than 20 % free space. Reads
+   `pg_tablespace_size()` and `pg_tablespace_location()`.
+2. **Invalid objects.** Report indexes marked `indisvalid = false`,
+   constraints in `pg_constraint` with `convalidated = false`, and
+   (where applicable) invalid materialised views. Non-zero counts
+   are a warning.
+3. **`plpgsql_check` integration.** If the extension is installed,
+   run `plpgsql_check_function()` over every procedure and function
+   in the target schema and report the warnings. If the extension is
+   missing, skip the check with an INFO-level note.
+4. **Bloat estimation.** Compare `pg_stat_user_tables.n_dead_tup`
+   to `n_live_tup` and flag tables where the dead-tuple ratio
+   exceeds a configurable threshold — a hint that autovacuum is
+   falling behind.
+5. **Connection and lock pressure.** Report long-running
+   transactions from `pg_stat_activity` and locks held for more than
+   a configurable interval.
+
+### Audit log for config changes
+
+Record every `set_checker_value` and `reset_checker_value` call into
+a `param_history` table with timestamp, old value, and new value.
+Useful in shared deployments.
 
 ## Disclaimer
 
