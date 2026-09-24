@@ -298,48 +298,40 @@ pg-explain-mcp/
 └── LICENSE
 ```
 
-## Roadmap
-
-### Additional checks
-
-- `partition_pruning` — detect queries that scan partitioned tables
-  without pruning.
-- `jit_decision` — flag expensive JIT compilation on short queries.
-
-### Multi-database support
-
-The `PlanCheck` interface and the SQLite config are database-agnostic
-in principle. The next step is a MySQL/MariaDB adapter and its own
-`plan_fields` / `checks` rows under `TARGET_DB_TYPE=mysql`.
-
 ### Database health checker
 
-A second MCP tool — `health_check` — that inspects the database as a
-whole instead of a single query. The same `PlanCheck` adapter pattern
-applies, but the scope moves from *"how does this plan look"* to
-*"is the database in good shape"*.
+A second kind of check, alongside plan checks — `health_check` — that
+inspects the database as a whole instead of a single query.
 
-Candidate checks, each independently toggleable via the same SQLite
-config:
+Health checks live in the **same** SQLite registry as plan checks,
+distinguished by a new `check_type` column (`'PLAN'` or `'HEALTH'`).
+This means they are configured, disabled, and tuned with the same
+tools: `show_params`, `set_checker_value`, `reset_checker_value`, and
+the `TARGET_DB_TYPE` scope all apply without change.
 
-1. **Tablespace free space.** Warn when any tablespace (or the
-   default `pg_default`) has less than 20 % free space. Reads
-   `pg_tablespace_size()` and `pg_tablespace_location()`.
-2. **Invalid objects.** Report indexes marked `indisvalid = false`,
-   constraints in `pg_constraint` with `convalidated = false`, and
-   (where applicable) invalid materialised views. Non-zero counts
-   are a warning.
+Candidate checks, each independently toggleable:
+
+1. **Tablespace free space.** Warn when any tablespace has less than
+   a configurable percentage of free space.
+2. **Invalid objects.** Report indexes with `indisvalid = false` and
+   constraints with `convalidated = false`.
 3. **`plpgsql_check` integration.** If the extension is installed,
    run `plpgsql_check_function()` over every procedure and function
-   in the target schema and report the warnings. If the extension is
-   missing, skip the check with an INFO-level note.
-4. **Bloat estimation.** Compare `pg_stat_user_tables.n_dead_tup`
-   to `n_live_tup` and flag tables where the dead-tuple ratio
-   exceeds a configurable threshold — a hint that autovacuum is
-   falling behind.
-5. **Connection and lock pressure.** Report long-running
-   transactions from `pg_stat_activity` and locks held for more than
-   a configurable interval.
+   in the target schema. If the extension is missing, skip with an
+   INFO-level note.
+4. **Bloat estimation.** Compare `n_dead_tup` to `n_live_tup` in
+   `pg_stat_user_tables` and flag tables above a configurable ratio.
+5. **Connection and lock pressure.** Report long-running transactions
+   and locks held beyond a configurable interval.
+
+Implementation shape:
+
+- new `HealthCheck` protocol in `analyzer.py` — same `Issue` type,
+  same `name`/`type` attributes, but `check()` takes no arguments
+  and reads from `pg_catalog` / `pg_stat_*` directly;
+- `CheckRegistry.load_health()` filtering by `check_type = 'HEALTH'`;
+- a single new MCP tool `health_check` returning a report with
+  `checks_applied` and `issues`, mirroring the `explain` output shape.
 
 ### Audit log for config changes
 
