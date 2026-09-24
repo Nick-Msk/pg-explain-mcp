@@ -298,16 +298,37 @@ pg-explain-mcp/
 └── LICENSE
 ```
 
+## Roadmap
+
+### Additional checks
+
+- **`PartitionPruningCheck`** — detect queries on partitioned tables
+  that failed to prune partitions. The plan shows `Append` /
+  `Merge Append` with a child count close to the total number of
+  partitions, even when the predicate only matches one or two.
+  Common in production, rarely covered by tutorials.
+- **`NonSargableCheck`** — flag predicates wrapped in functions or
+  casts (`lower(email) = 'x'`, `date_col::text = '2026-01-01'`) that
+  prevent index usage. These show up as `Filter` entries instead of
+  `Index Cond`. Fixable with a functional index or by rewriting the
+  query.
+- **`RepeatedScanCheck`** — report the same relation scanned more
+  than once within a single plan (via CTEs, subqueries, or lateral
+  joins, not self-joins). Often signals that CTE materialisation or
+  a temp table would reduce I/O.
+- **`jit_decision`** — flag expensive JIT compilation on short
+  queries.
+
 ### Database health checker
 
-A second kind of check, alongside plan checks — `health_check` — that
-inspects the database as a whole instead of a single query.
+A second kind of check, alongside plan checks — `health_check` —
+that inspects the database as a whole instead of a single query.
 
 Health checks live in the **same** SQLite registry as plan checks,
 distinguished by a new `check_type` column (`'PLAN'` or `'HEALTH'`).
 This means they are configured, disabled, and tuned with the same
-tools: `show_params`, `set_checker_value`, `reset_checker_value`, and
-the `TARGET_DB_TYPE` scope all apply without change.
+tools: `show_params`, `set_checker_value`, `reset_checker_value`,
+and the `TARGET_DB_TYPE` scope all apply without change.
 
 Candidate checks, each independently toggleable:
 
@@ -321,17 +342,29 @@ Candidate checks, each independently toggleable:
    INFO-level note.
 4. **Bloat estimation.** Compare `n_dead_tup` to `n_live_tup` in
    `pg_stat_user_tables` and flag tables above a configurable ratio.
-5. **Connection and lock pressure.** Report long-running transactions
-   and locks held beyond a configurable interval.
+5. **Connection and lock pressure.** Report long-running
+   transactions and locks held beyond a configurable interval.
 
 Implementation shape:
 
 - new `HealthCheck` protocol in `analyzer.py` — same `Issue` type,
-  same `name`/`type` attributes, but `check()` takes no arguments
+  same `name` / `type` attributes, but `check()` takes no arguments
   and reads from `pg_catalog` / `pg_stat_*` directly;
 - `CheckRegistry.load_health()` filtering by `check_type = 'HEALTH'`;
 - a single new MCP tool `health_check` returning a report with
   `checks_applied` and `issues`, mirroring the `explain` output shape.
+
+### Multi-database support
+
+The `PlanCheck` interface and the SQLite config are database-agnostic
+in principle. The next step is a MySQL/MariaDB adapter and its own
+`plan_fields` / `checks` rows under `TARGET_DB_TYPE=mysql`.
+
+### Audit log for config changes
+
+Record every `set_checker_value` and `reset_checker_value` call into
+a `param_history` table with timestamp, old value, and new value.
+Useful in shared deployments.
 
 ### Audit log for config changes
 
