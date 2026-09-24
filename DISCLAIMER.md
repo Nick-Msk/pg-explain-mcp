@@ -55,16 +55,29 @@ Error messages shown to the LLM must be descriptive. Do not embed shell commands
 
 ## 3a. Write Access to the Config Database
 
-Three MCP tools (`set_checker_value`, `reset_checker_value`, and
-`show_params`) read and write the SQLite config database at
+Three MCP tools — `set_checker_value`, `reset_checker_value`, and
+`show_params` (read-only) — access the SQLite config database at
 `config/checks.db`. This is the tool's **own** configuration store,
-not user data. It is separate from the read-only contract with
-PostgreSQL.
+not user data. It is entirely separate from the read-only contract
+with PostgreSQL.
 
-The assistant is instructed to ask before calling
-`set_checker_value` — but the tool itself does not enforce this.
-If you deploy `pg-explain-mcp` in a shared environment, restrict
-filesystem permissions on `config/checks.db` accordingly.
+The assistant is instructed to **ask before** calling
+`set_checker_value` or `reset_checker_value`, but the tool itself
+does not enforce this. If you deploy `pg-explain-mcp` in a shared or
+multi-user environment:
+
+- restrict filesystem permissions on `config/checks.db` so that only
+  trusted users can read or write it,
+- consider running the MCP server under a dedicated service account
+  with no access to other files,
+- periodically review the database contents with
+  `python -m pg_explain_mcp.config --show` to detect unintended
+  changes.
+
+Changes to the config database take effect on the next `explain`
+call — no restart required. This makes the tools powerful but also
+means a change made by accident or by a misbehaving assistant is
+visible immediately.
 
 ## 4. No Liability
 

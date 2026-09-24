@@ -304,7 +304,11 @@ pg-explain-mcp/
   `jit_decision` for expensive JIT compilation on short queries.
 - **Multi-database support** — the `PlanCheck` interface and the
   SQLite config are database-agnostic in principle; the next step is
-  a MySQL/MariaDB adapter and its own `plan_fields`/`checks` rows.
+  a MySQL/MariaDB adapter and its own `plan_fields`/`checks` rows
+  under `TARGET_DB_TYPE=mysql`.
+- **Audit log for config changes** — record every `set_checker_value`
+  and `reset_checker_value` call into a `param_history` table with
+  timestamp, old value, and new value. Useful in shared deployments.
 
 ## Disclaimer
 
