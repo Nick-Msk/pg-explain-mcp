@@ -25,10 +25,14 @@ class Issue:
     type: str
     message: str
     node: str
+    depth: int = 0
+    parent_node: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
+    def with_context(self, depth: int, parent_node: str) -> "Issue":
+        return replace(self, depth=depth, parent_node=parent_node)
 
 class PlanCheck(Protocol):
     """Adapter interface: each check inspects a single plan node.
@@ -473,6 +477,60 @@ class IndexScanCheck:
             )
         ]
 
+class PartitionPruningCheck:
+    """Append / Merge Append over many partitions — pruning may have failed.
+
+    On a partitioned table the planner prunes partitions that cannot
+    match the query's predicate. When pruning succeeds, ``Append`` has
+    few children. When it fails, ``Append`` covers every partition.
+
+    The check cannot know the total partition count from the plan
+    alone, so it uses an absolute threshold. When it fires, it sets
+    ``skip_children=True`` — the individual partition scans are a
+    *consequence* of the pruning failure, not separate problems, and
+    reporting them would drown the real signal.
+    """
+
+    name = "PartitionPruningCheck"
+    type = "partition_pruning"
+
+    def __init__(self, max_children: int = 3) -> None:
+        self.max_children = max_children
+
+    def check(self, node: dict[str, Any]) -> list[Issue]:
+        if node.get("Node Type") not in ("Append", "Merge Append"):
+            return []
+
+        children = node.get("Plans", [])
+        count = len(children)
+        if count <= self.max_children:
+            return []
+
+        names = [
+            c.get("Relation Name")
+            for c in children
+            if c.get("Relation Name")
+        ]
+        preview = ", ".join(names[:3])
+        if len(names) > 3:
+            preview += f", … (+{len(names) - 3} more)"
+
+        return [
+            Issue(
+                severity=SEVERITY_WARNING,
+                type=self.type,
+                message=(
+                    f"Append over {count} partitions "
+                    f"(threshold: {self.max_children}). "
+                    "Partition pruning may have failed. "
+                    "Check that the predicate on the partition key is "
+                    "sargable — no function calls, no casts, no "
+                    "expressions. Scanned: " + preview
+                ),
+                node=node.get("Node Type"),
+                skip_children=True,
+            )
+        ]
 
 # ---------------------------------------------------------------------------
 # Traversal and reporting
@@ -483,14 +541,17 @@ def _walk_plan(
     node: dict[str, Any],
     issues: list[Issue],
     checks: tuple[PlanCheck, ...],
+    depth: int = 0,
+    parent_node: str = ""
 ) -> None:
     """Recursively traverse the plan tree, applying every check to each node."""
     for check in checks:
-        issues.extend(check.check(node))
+        for issue in check.check(node):
+            issues.append(issue.with_context(depth, parent_node))
 
+    node_type = node.get("Node Type", "?")
     for child in node.get("Plans", []):
-        _walk_plan(child, issues, checks)
-
+        _walk_plan(child, issues, checks, depth + 1, node_type)
 
 def analyze_plan(
     plan_json: list[dict[str, Any]],

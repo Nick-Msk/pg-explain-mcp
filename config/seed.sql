@@ -14,6 +14,7 @@ insert into checks (num, database, name, description, enabled) values
     (5, 'postgres', 'NestedLoopCheck',       'Nested Loop with many inner iterations',         1),
     (6, 'postgres', 'BitmapHeapScanCheck',   'large Bitmap Heap Scan',                         1),
     (7, 'postgres', 'IndexScanCheck',        'stale visibility map / poor heap locality',      1);
+    (8, 'postgres', 'PartitionPruningCheck', 'Append over many partitions — pruning may have failed', 1)
 
 insert into check_params (num, database, param, value, default_value) values
     (1, 'postgres', 'threshold_rows',    '1000',   '1000'),
@@ -28,6 +29,7 @@ insert into check_params (num, database, param, value, default_value) values
     (7, 'postgres', 'min_rows',          '1000',   '1000'),
     (7, 'postgres', 'heap_fetch_ratio',  '0.10',   '0.10'),
     (7, 'postgres', 'min_disk_blocks',   '100',    '100');
+    (8, 'postgres', 'max_children',      '3',      '3')
 
 insert into plan_fields (database, raw, key, enabled) values
     ('postgres', 'Relation Name',          'relation',               1),

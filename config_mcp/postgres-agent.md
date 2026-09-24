@@ -78,6 +78,17 @@ diagnosing query performance issues using execution plans.
   relevant check may be disabled in the configuration — say so instead
   of speculating about why the analyzer did not flag it.
 
+- **Group issues by root cause.** When several issues share a parent
+  node — for example, one `estimate_mismatch` on an `Append` followed
+  by many `seq_scan` issues at `depth + 1` under the same `Append` —
+  present the parent issue as the root cause, and mention the child
+  issues only as its consequences ("and N partition scans were
+  affected"). Do not list every child issue individually unless the
+  user asks.
+- Order issues by `severity` first, then by `depth` (shallower first).
+  Shallow issues are usually root causes; deep issues are usually
+  consequences.
+
 ## Checks reference
 
 The analyzer reports issues by `type`. Below are the two that require

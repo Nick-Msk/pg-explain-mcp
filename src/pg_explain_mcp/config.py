@@ -15,6 +15,7 @@ from pg_explain_mcp.analyzer import (
     NestedLoopCheck,
     PlanCheck,
     SeqScanCheck,
+    PartitionPruningCheck
 )
 
 _CONFIG_DIR = Path(__file__).resolve().parent.parent.parent / "config"
@@ -49,6 +50,9 @@ _REGISTRY: dict[str, tuple[type, dict[str, Callable[[str], Any]]]] = {
         "heap_fetch_ratio": float,
         "min_disk_blocks":  int,
     }),
+        "PartitionPruningCheck": (PartitionPruningCheck, {
+        "max_children": int,
+    })
 }
 
 # ---------------------------------------------------------------------------

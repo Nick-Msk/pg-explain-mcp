@@ -384,6 +384,97 @@ begin
 end;
 $$;
 
+-- -----------------------------------------------------------------------------
+--  fixture parameters
+-- -----------------------------------------------------------------------------
+--
+-- Constants used by multiple fixtures. In PostgreSQL there is no
+-- "package variable", so a schema-level function serves the same
+-- purpose: change the body, and every caller picks up the new value
+-- on the next call (no restart, no recompile).
+
+create or replace function partition_pruning_year() returns int
+language sql immutable
+as $$ select 2026 $$;
+
+-- -----------------------------------------------------------------------------
+--  partition_pruning
+-- -----------------------------------------------------------------------------
+
+create table data_partition_pruning (
+    id   bigserial,
+    ts   date    not null,
+    val  integer not null,
+    pad  text
+) partition by range (ts);
+
+create procedure create_monthly_partitions(
+    parent_table text,
+    year_start   int,
+    year_end     int,
+    schema_name  text default 'mcp_explain_tool'
+)
+language plpgsql
+set search_path = mcp_explain_tool, pg_catalog
+as $$
+declare
+    y int;
+    m int;
+    part_name text;
+    from_date date;
+    to_date   date;
+begin
+    for y in year_start .. year_end loop
+        for m in 1 .. 12 loop
+            part_name := format(
+                '%s_p%s%s',
+                parent_table,
+                to_char(y, 'FM0000'),
+                to_char(m, 'FM00')
+            );
+            from_date := make_date(y, m, 1);
+            to_date   := (from_date + interval '1 month')::date;
+
+            execute format(
+                'create table if not exists %I.%I partition of %I.%I '
+                'for values from (%L) to (%L)',
+                schema_name, part_name,
+                schema_name, parent_table,
+                from_date, to_date
+            );
+        end loop;
+    end loop;
+end;
+$$;
+
+create procedure fill_partition_pruning(totalcount int)
+language plpgsql
+set search_path = mcp_explain_tool, pg_catalog
+as $$
+declare
+    y int := partition_pruning_year();
+begin
+    call create_monthly_partitions('data_partition_pruning', y, y);
+
+    insert into data_partition_pruning (ts, val, pad)
+    select
+        make_date(y, 1, 1) + (n % 365)::int,
+        (random() * 1_000_000)::int,
+        repeat('x', 200)
+    from generate_series(1, totalcount) as n;
+
+    analyze data_partition_pruning;
+end;
+$$;
+
+create procedure clear_partition_pruning()
+language plpgsql
+set search_path = mcp_explain_tool, pg_catalog
+as $$
+begin
+    truncate data_partition_pruning restart identity;
+end;
+$$;
 
 -- -----------------------------------------------------------------------------
 --  Aggregates (grow as adapters are added)
@@ -405,6 +496,7 @@ begin
     call fill_nested_loop(totalcount);
     call fill_bitmap_heap_scan(totalcount);
     call fill_estimate_mismatch(totalcnt);
+    call fill_partition_pruning(totalcnt);
 end;
 $$;
 
@@ -420,6 +512,7 @@ begin
     call clear_nested_loop();
     call clear_bitmap_heap_scan();
     call clear_estimate_mismatch();
+    clear_partition_pruning();
 end;
 $$;
 
