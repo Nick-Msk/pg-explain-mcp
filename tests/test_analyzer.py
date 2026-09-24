@@ -7,6 +7,7 @@ from pg_explain_mcp.analyzer import (
     EstimateMismatchCheck,
     IndexScanCheck,
     NestedLoopCheck,
+    PartitionPruningCheck,
     SeqScanCheck,
     analyze_plan,
     summarize_plan_node,
@@ -357,6 +358,79 @@ class TestIndexScanCheck:
         assert IndexScanCheck().check({"Node Type": "Index Scan"}) == []
         assert IndexScanCheck().check({"Node Type": "Index Only Scan"}) == []
         assert IndexScanCheck().check({}) == []
+
+class TestPartitionPruningCheck:
+    def test_append_with_few_children_is_ok(self):
+        node = {
+            "Node Type": "Append",
+            "Plans": [
+                {"Node Type": "Seq Scan", "Relation Name": "t_p06"},
+                {"Node Type": "Seq Scan", "Relation Name": "t_p07"},
+                {"Node Type": "Seq Scan", "Relation Name": "t_p08"},
+            ],
+        }
+        assert PartitionPruningCheck().check(node) == []
+
+    def test_append_at_threshold_is_ok(self):
+        node = {
+            "Node Type": "Append",
+            "Plans": [
+                {"Node Type": "Seq Scan", "Relation Name": f"t_p{i:02d}"}
+                for i in range(1, 4)
+            ],
+        }
+        assert PartitionPruningCheck().check(node) == []
+
+    def test_append_with_many_children_is_reported(self):
+        node = {
+            "Node Type": "Append",
+            "Plans": [
+                {"Node Type": "Seq Scan", "Relation Name": f"t_p{i:02d}"}
+                for i in range(1, 13)
+            ],
+        }
+        issues = PartitionPruningCheck().check(node)
+        assert len(issues) == 1
+        assert issues[0].severity == "warning"
+        assert issues[0].type == "partition_pruning"
+        assert "12 partitions" in issues[0].message
+        assert "t_p01" in issues[0].message
+        assert "consequence, not stale statistics" in issues[0].message
+        assert "ANALYZE will not help" in issues[0].message
+
+    def test_merge_append_is_also_checked(self):
+        node = {
+            "Node Type": "Merge Append",
+            "Plans": [{"Node Type": "Seq Scan"} for _ in range(10)],
+        }
+        issues = PartitionPruningCheck().check(node)
+        assert len(issues) == 1
+        assert issues[0].type == "partition_pruning"
+
+    def test_non_append_node_is_ignored(self):
+        node = {
+            "Node Type": "Seq Scan",
+            "Plans": [{} for _ in range(50)],
+        }
+        assert PartitionPruningCheck().check(node) == []
+
+    def test_custom_threshold(self):
+        node = {
+            "Node Type": "Append",
+            "Plans": [{"Node Type": "Seq Scan"} for _ in range(5)],
+        }
+        assert PartitionPruningCheck(max_children=10).check(node) == []
+        assert len(PartitionPruningCheck(max_children=3).check(node)) == 1
+
+    def test_children_without_relation_name(self):
+        node = {
+            "Node Type": "Append",
+            "Plans": [{"Node Type": "Seq Scan"} for _ in range(12)],
+        }
+        issues = PartitionPruningCheck().check(node)
+        assert len(issues) == 1
+        # preview is empty, but the message must still be well-formed
+        assert "Scanned: " in issues[0].message
 
 class TestSummarizePlanNode:
     FIELDS = {

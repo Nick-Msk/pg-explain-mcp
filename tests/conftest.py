@@ -12,6 +12,7 @@ from pg_explain_mcp.analyzer import (
     EstimateMismatchCheck,
     IndexScanCheck,
     NestedLoopCheck,
+    PartitionPruningCheck,
     SeqScanCheck,
 )
 
@@ -23,5 +24,6 @@ ALL_CHECKS = (
     NestedLoopCheck(),
     BitmapHeapScanCheck(),
     IndexScanCheck(),
+    PartitionPruningCheck()
 )
 

@@ -488,11 +488,13 @@ class PartitionPruningCheck:
     few children. When it fails, ``Append`` covers every partition.
 
     The check cannot know the total partition count from the plan
-    alone, so it uses an absolute threshold. Child partition scans
-    will also be reported by ``SeqScanCheck`` — the walker enriches
-    every issue with ``depth`` and ``parent_node`` so the LLM can
-    group them under the root cause instead of listing each one
-    separately.
+    alone, so it uses an absolute threshold. The message also warns
+    that any cardinality misestimates inside the partitions are a
+    *consequence* of the pruning failure — not stale statistics. When
+    the predicate is non-sargable, the planner has no statistics to
+    attribute rows to specific partitions, so per-partition estimates
+    default to a uniform split. ``ANALYZE`` will not fix that; only
+    rewriting the predicate will.
     """
 
     name = "PartitionPruningCheck"
@@ -526,12 +528,17 @@ class PartitionPruningCheck:
                 message=(
                     f"Append over {count} partitions "
                     f"(threshold: {self.max_children}). "
-                    "Partition pruning may have failed. "
-                    "Check that the predicate on the partition key is "
-                    "sargable — no function calls, no casts, no "
-                    "expressions. Scanned: " + preview
+                    "Partition pruning may have failed — check that the "
+                    "predicate on the partition key is sargable: no "
+                    "function calls, no casts, no expressions. "
+                    "Note: any cardinality misestimates inside the "
+                    "partitions are a consequence, not stale statistics. "
+                    "The planner cannot attribute rows to partitions "
+                    "when the predicate is non-sargable, so ANALYZE will "
+                    "not help — rewrite the predicate. "
+                    "Scanned: " + preview
                 ),
-                node=node.get("Node Type")
+                node=node.get("Node Type"),
             )
         ]
 
