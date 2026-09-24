@@ -13,9 +13,9 @@ from pg_explain_mcp.analyzer import (
     EstimateMismatchCheck,
     IndexScanCheck,
     NestedLoopCheck,
+    PartitionPruningCheck,
     PlanCheck,
     SeqScanCheck,
-    PartitionPruningCheck
 )
 
 _CONFIG_DIR = Path(__file__).resolve().parent.parent.parent / "config"

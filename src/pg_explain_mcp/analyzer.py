@@ -5,7 +5,7 @@ checks (adapters) to every node. To add a new check, implement the
 ``PlanCheck`` protocol and register the instance in ``DEFAULT_CHECKS``.
 """
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Any, Protocol
 
 SEVERITY_WARNING = "warning"
@@ -157,12 +157,15 @@ class EstimateMismatchCheck:
             return []
 
         node_type = node.get("Node Type", "")
+        relation = node.get("Relation Name", "")
+        where = f" on '{relation}'" if relation else ""
+
         return [
             Issue(
                 severity=SEVERITY_WARNING,
                 type=self.type,
                 message=(
-                    f"Planner misestimated cardinality on '{node_type}': "
+                    f"Planner misestimated cardinality on '{node_type}'{where}: "
                     f"expected {planned}, got {actual} (ratio x{ratio:.1f}). "
                     "Consider running ANALYZE."
                 ),
@@ -485,10 +488,11 @@ class PartitionPruningCheck:
     few children. When it fails, ``Append`` covers every partition.
 
     The check cannot know the total partition count from the plan
-    alone, so it uses an absolute threshold. When it fires, it sets
-    ``skip_children=True`` — the individual partition scans are a
-    *consequence* of the pruning failure, not separate problems, and
-    reporting them would drown the real signal.
+    alone, so it uses an absolute threshold. Child partition scans
+    will also be reported by ``SeqScanCheck`` — the walker enriches
+    every issue with ``depth`` and ``parent_node`` so the LLM can
+    group them under the root cause instead of listing each one
+    separately.
     """
 
     name = "PartitionPruningCheck"
@@ -527,8 +531,7 @@ class PartitionPruningCheck:
                     "sargable — no function calls, no casts, no "
                     "expressions. Scanned: " + preview
                 ),
-                node=node.get("Node Type"),
-                skip_children=True,
+                node=node.get("Node Type")
             )
         ]
 
