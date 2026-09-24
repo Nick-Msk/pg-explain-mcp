@@ -36,15 +36,16 @@ do* about it, instead of just describing the SQL.
 Every `explain` response includes an `issues` array. Each entry is
 produced by an independent, pluggable `PlanCheck`:
 
-| Check                    | What it reports                                        |
-|--------------------------|--------------------------------------------------------|
-| `SeqScanCheck`           | Sequential scan that discards most of what it reads    |
-| `IndexScanCheck`         | Stale visibility map / poor heap locality              |
-| `BitmapHeapScanCheck`    | Large Bitmap Heap Scan                                 |
-| `DiskSpillSortCheck`     | Sort spilling to disk (`external merge`)               |
-| `DiskSpillHashCheck`     | Hash operation using multiple batches                  |
-| `NestedLoopCheck`        | Nested Loop with a high number of inner iterations     |
-| `EstimateMismatchCheck`  | Planner cardinality misestimate                        |
+| Check                    | What it reports                                         |
+|--------------------------|---------------------------------------------------------|
+| `SeqScanCheck`           | Sequential scan that discards most of what it reads     |
+| `IndexScanCheck`         | Stale visibility map / poor heap locality               |
+| `BitmapHeapScanCheck`    | Large Bitmap Heap Scan                                  |
+| `DiskSpillSortCheck`     | Sort spilling to disk (`external merge`)                |
+| `DiskSpillHashCheck`     | Hash operation using multiple batches                   |
+| `NestedLoopCheck`        | Nested Loop with a high number of inner iterations      |
+| `EstimateMismatchCheck`  | Planner cardinality misestimate                         |
+| `PartitionPruningCheck`  | `Append` over many partitions — pruning may have failed |
 
 To add a new check, implement the `PlanCheck` protocol in
 `src/pg_explain_mcp/analyzer.py`, register the class in
@@ -270,6 +271,7 @@ check, with the raw tool output and analysis:
 | `NestedLoopCheck`      | 100 vs. 5000 inner iterations                                         |
 | `BitmapHeapScanCheck`  | narrow vs. wide range on the same table                               |
 | `EstimateMismatchCheck`| norm, norm+index, skewed, skewed-other-value                          |
+| `PartitionPruningCheck` | range predicate vs. non-sargable predicate on partitioned table      |
 
 See [`usage_examples/`](usage_examples/) for the full index, the test
 environment, and prompting tips.
@@ -359,12 +361,6 @@ Implementation shape:
 The `PlanCheck` interface and the SQLite config are database-agnostic
 in principle. The next step is a MySQL/MariaDB adapter and its own
 `plan_fields` / `checks` rows under `TARGET_DB_TYPE=mysql`.
-
-### Audit log for config changes
-
-Record every `set_checker_value` and `reset_checker_value` call into
-a `param_history` table with timestamp, old value, and new value.
-Useful in shared deployments.
 
 ### Audit log for config changes
 

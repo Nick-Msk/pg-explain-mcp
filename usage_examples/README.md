@@ -208,3 +208,22 @@ The skewed fixture uses `pg_restore_attribute_stats()` to overwrite
 statistics for a single value, and disables autovacuum on the table so
 the fake stats survive.
 
+---
+
+## PartitionPruningCheck: pruning works vs. pruning failed
+
+Reproducible two-part scenario backed by
+`mcp_explain_tool.data_partition_pruning` — a table partitioned by
+month via the `create_monthly_partitions` helper.
+
+Prerequisites:
+
+```sql
+call mcp_explain_tool.fill_partition_pruning(1000000);
+```
+
+| Example | What it demonstrates |
+|---|---|
+| [Range predicate — pruning works](pg_partition_pruning/sample_partition_pruning_norm.md) | `Append` over 3 partitions, no warnings |
+| [Non-sargable predicate — pruning fails](pg_partition_pruning/sample_partition_pruning_trigger.md) | `Append` over 12 partitions, `partition_pruning` fires |
+
