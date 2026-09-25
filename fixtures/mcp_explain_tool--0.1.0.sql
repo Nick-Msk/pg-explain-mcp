@@ -533,9 +533,9 @@ begin
     call fill_disk_spill_hash(totalcount);
     call fill_nested_loop(totalcount);
     call fill_bitmap_heap_scan(totalcount);
-    call fill_estimate_mismatch(totalcnt);
-    call fill_partition_pruning(totalcnt);
-    call fill_non_sargable(totalcnt);
+    call fill_estimate_mismatch(totalcount);
+    call fill_partition_pruning(totalcount);
+    call fill_non_sargable(totalcount);
 end;
 $$;
 
