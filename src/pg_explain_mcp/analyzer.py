@@ -175,7 +175,7 @@ class EstimateMismatchCheck:
                     "Investigate why: stale statistics, a non-sargable "
                     "predicate on the column, or a distribution not covered "
                     "by the column histogram. ANALYZE helps only in the "
-                "first case."
+                    "first case."
             ),
             node=node_type,
             )
