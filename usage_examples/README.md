@@ -31,7 +31,7 @@ This keeps each example isolated: the `_norm` case should report
 `issue_count: 0`, and the `_<failing>` case should report only the
 specific issue the example is about — plus, occasionally, an
 unrelated `seq_scan` when the underlying scan reads more than
-1000 rows (see [pg_seq_scan_adapters/](pg_seq_scan_adapters/) for
+1000 rows (see [`pg_seq_scan_adapters`/](pg_seq_scan_adapters/) for
 details).
 
 ## prerequisites
@@ -226,4 +226,25 @@ call mcp_explain_tool.fill_partition_pruning(1000000);
 |---|---|
 | [Range predicate — pruning works](pg_partition_pruning/sample_partition_pruning_norm.md) | `Append` over 3 partitions, no warnings |
 | [Non-sargable predicate — pruning fails](pg_partition_pruning/sample_partition_pruning_trigger.md) | `Append` over 12 partitions, `partition_pruning` fires |
+
+
+---
+
+## NonSargableCheck: sargable vs. non-sargable predicate
+
+Reproducible two-part scenario backed by
+`mcp_explain_tool.data_non_sargable` — a table with a plain index on
+`email`.
+
+Prerequisites:
+
+```sql
+call mcp_explain_tool.fill_non_sargable(5000000);
+```
+
+| Example | What it demonstrates |
+|---|---|
+| [Sargable predicate](pg_non_sargable/sample_non_sargable_norm.md) | `Index Scan`, no warnings |
+| [Non-sargable predicate](pg_non_sargable/sample_non_sargable_trigger.md) | `lower(email) = '...'`, `non_sargable` + `seq_scan` |
+| [After the fix](pg_non_sargable/sample_non_sargable_fixed.md) | functional index on `lower(email)`, back to `Index Scan` |
 

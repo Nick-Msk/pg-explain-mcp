@@ -12,6 +12,7 @@ from pg_explain_mcp.analyzer import (
     EstimateMismatchCheck,
     IndexScanCheck,
     NestedLoopCheck,
+    NonSargableCheck,
     PartitionPruningCheck,
     SeqScanCheck,
 )
@@ -24,6 +25,7 @@ ALL_CHECKS = (
     NestedLoopCheck(),
     BitmapHeapScanCheck(),
     IndexScanCheck(),
-    PartitionPruningCheck()
+    PartitionPruningCheck(),
+    NonSargableCheck()   # no relation_indexes — won't fire, fine for integration tests
 )
 

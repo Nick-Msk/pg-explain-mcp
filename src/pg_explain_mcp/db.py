@@ -79,41 +79,45 @@ def explain_query(sql: str, analyze: bool = True, buffers: bool = True) -> dict[
             result = cur.fetchone()
             return result
 
-
 def get_indexes(table_name: str | None = None) -> list[dict[str, Any]]:
     """Return a list of indexes for user tables.
 
-    Args:
-        table_name: Optional table name to filter by. If None, returns
-                    indexes for all user tables.
-
-    Returns:
-        Each row contains: schema, table, index name, full definition,
-        uniqueness, primary-key flag, and the list of indexed columns.
+    Each row contains: schema, table, index name, full definition,
+    uniqueness, primary-key flag, whether the index is functional,
+    the leading attribute number (0 = expression), and the list of
+    plain column names covered by the index.
     """
     query = """
         SELECT
-            ns.nspname                AS schema_name,
-            tbl.relname               AS table_name,
-            idx.relname               AS index_name,
-            pg_get_indexdef(idx.oid)  AS index_def,
-            i.indisunique             AS is_unique,
-            i.indisprimary            AS is_primary,
-            array_agg(att.attname ORDER BY att.attnum) AS columns
+            ns.nspname               AS schema_name,
+            tbl.relname              AS table_name,
+            idx.relname              AS index_name,
+            pg_get_indexdef(idx.oid) AS index_def,
+            i.indisunique            AS is_unique,
+            i.indisprimary           AS is_primary,
+            (i.indexprs IS NOT NULL) AS is_functional,
+            i.indkey[0]              AS leading_attnum,
+            coalesce(
+                (
+                    SELECT array_agg(a.attname ORDER BY ord.n)
+                    FROM unnest(i.indkey) WITH ORDINALITY AS ord(attnum, n)
+                    LEFT JOIN pg_attribute a
+                        ON a.attrelid = tbl.oid
+                       AND a.attnum   = ord.attnum
+                    WHERE ord.attnum > 0
+                ),
+                ARRAY[]::name[]
+            ) AS plain_columns
         FROM pg_index i
-        JOIN pg_class idx ON idx.oid = i.indexrelid
-        JOIN pg_class tbl ON tbl.oid = i.indrelid
-        JOIN pg_namespace ns ON ns.oid = tbl.relnamespace
-        JOIN pg_attribute att
-          ON att.attrelid = tbl.oid
-         AND att.attnum = ANY(i.indkey)
+        JOIN pg_class idx     ON idx.oid = i.indexrelid
+        JOIN pg_class tbl     ON tbl.oid = i.indrelid
+        JOIN pg_namespace ns  ON ns.oid  = tbl.relnamespace
         WHERE ns.nspname NOT IN ('pg_catalog', 'information_schema')
           AND tbl.relkind = 'r'
-          AND (%(table_name)s IS NULL OR tbl.relname = %(table_name)s)
-        GROUP BY ns.nspname, tbl.relname, idx.relname, idx.oid,
-                 i.indisunique, i.indisprimary
+          AND (%(table_name)s::text IS NULL OR tbl.relname = %(table_name)s::text)
         ORDER BY ns.nspname, tbl.relname, idx.relname
     """
+
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(query, {"table_name": table_name})

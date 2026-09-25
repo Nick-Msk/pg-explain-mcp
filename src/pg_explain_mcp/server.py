@@ -25,25 +25,64 @@ _registry = CheckRegistry(DEFAULT_DB)
 
 mcp = FastMCP("pg-explain")
 
-def _format_indexes(rows: list[dict[str, any]]) -> str:
+def _extract_index_args(index_def: str) -> str:
+    """Extract the argument list from a CREATE INDEX definition.
+
+    Scans for the first top-level ``(`` and returns everything up to
+    its matching ``)``. Handles nested parens, casts, and multi-column
+    indexes:
+
+        ... USING btree (lower(email))     -> "lower(email)"
+        ... USING btree (id, upper(val))   -> "id, upper(val)"
+    """
+    depth = 0
+    start = -1
+    for i, c in enumerate(index_def):
+        if c == "(":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 0 and start >= 0:
+                return index_def[start + 1 : i]
+    return index_def
+
+
+def _format_indexes(rows: list[dict[str, Any]]) -> str:
     """Format index rows into a human-readable string."""
     if not rows:
         return "No indexes found."
 
     lines = []
     for row in rows:
-        cols = ", ".join(row["columns"])
         if row["is_primary"]:
             kind = "PRIMARY KEY"
+        elif row["is_functional"]:
+            kind = "FUNCTIONAL"
         elif row["is_unique"]:
             kind = "UNIQUE"
         else:
             kind = "INDEX"
+
+        if row["is_functional"]:
+            cols_str = _extract_index_args(row["index_def"])
+        else:
+            plain = row.get("plain_columns") or []
+            cols_str = ", ".join(plain)
+
         lines.append(
-            f"{row['schema_name']}.{row['table_name']} → {row['index_name']} [{kind}] ({cols})"
+            f"{row['schema_name']}.{row['table_name']} → "
+            f"{row['index_name']} [{kind}] ({cols_str})"
         )
     return "\n".join(lines)
 
+def _collect_relation_names(node: dict[str, Any], out: set[str]) -> None:
+    rel = node.get("Relation Name")
+    if rel:
+        out.add(rel)
+    for child in node.get("Plans", []):
+        _collect_relation_names(child, out)
 
 @mcp.tool()
 def ping() -> str:
@@ -122,8 +161,14 @@ def explain(sql: str) -> str:
         root = plan_json[0]
         plan_tree = root.get("Plan", {})
 
-        checks = _registry.load()   # fresh on every call
-        fields = _registry.load_fields() # fresh on every call
+        relation_names: set[str] = set()
+        _collect_relation_names(plan_tree, relation_names)
+        relation_indexes = {
+            rel: get_indexes(rel) for rel in relation_names
+        }
+
+        checks = _registry.load(relation_indexes=relation_indexes)
+        fields = _registry.load_fields()
 
         report = analyze_plan(plan_json, checks=checks)
         report["plan_nodes"] = summarize_plan_node(plan_tree, fields)

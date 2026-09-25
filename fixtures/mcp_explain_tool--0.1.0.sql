@@ -477,6 +477,44 @@ end;
 $$;
 
 -- -----------------------------------------------------------------------------
+--  non_sargable
+-- -----------------------------------------------------------------------------
+
+create table data_non_sargable (
+    id     bigserial primary key,
+    email  text      not null,
+    pad    text
+);
+
+-- Plain index on email. Deliberately no functional index — the whole
+-- point is that lower(email) = 'x' cannot use this index.
+create index idx_data_non_sargable_email on data_non_sargable (email);
+
+create procedure fill_non_sargable(totalcount int)
+language plpgsql
+set search_path = mcp_explain_tool, pg_catalog
+as $$
+begin
+    insert into data_non_sargable (email, pad)
+    select
+        'user' || lpad(n::text, 10, '0') || '@example.com',
+        repeat('x', 200)
+    from generate_series(1, totalcount) as n;
+
+    analyze data_non_sargable;
+end;
+$$;
+
+create procedure clear_non_sargable()
+language plpgsql
+set search_path = mcp_explain_tool, pg_catalog
+as $$
+begin
+    truncate data_non_sargable restart identity;
+end;
+$$;
+
+-- -----------------------------------------------------------------------------
 --  Aggregates (grow as adapters are added)
 -- -----------------------------------------------------------------------------
 
@@ -497,6 +535,7 @@ begin
     call fill_bitmap_heap_scan(totalcount);
     call fill_estimate_mismatch(totalcnt);
     call fill_partition_pruning(totalcnt);
+    call fill_non_sargable(totalcnt);
 end;
 $$;
 
@@ -512,7 +551,8 @@ begin
     call clear_nested_loop();
     call clear_bitmap_heap_scan();
     call clear_estimate_mismatch();
-    clear_partition_pruning();
+    call clear_partition_pruning();
+    call clear_non_sargable();
 end;
 $$;
 

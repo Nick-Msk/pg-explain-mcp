@@ -13,6 +13,7 @@ from pg_explain_mcp.analyzer import (
     EstimateMismatchCheck,
     IndexScanCheck,
     NestedLoopCheck,
+    NonSargableCheck,
     PartitionPruningCheck,
     PlanCheck,
     SeqScanCheck,
@@ -52,6 +53,9 @@ _REGISTRY: dict[str, tuple[type, dict[str, Callable[[str], Any]]]] = {
     }),
         "PartitionPruningCheck": (PartitionPruningCheck, {
         "max_children": int,
+    }),
+        "NonSargableCheck": (NonSargableCheck, {
+        "threshold_rows": int,
     })
 }
 
@@ -253,6 +257,7 @@ def _ensure_db(db_path: Path) -> None:
 def load_checks(
     database: str = "postgres",
     db_path: Path | str = DEFAULT_DB,
+    relation_indexes: dict[str, list[dict[str, Any]]] | None = None
 ) -> tuple[PlanCheck, ...]:
     """Load enabled checks for ``database`` from the SQLite config.
 
@@ -296,6 +301,8 @@ def load_checks(
                 if pname not in param_types:
                     raise KeyError(f"Unknown param '{pname}' for {name}")
                 params[pname] = param_types[pname](pval)
+                if name == "NonSargableCheck":
+                    params["relation_indexes"] = relation_indexes or {}
 
             checks.append(cls(**params))
 
@@ -317,8 +324,15 @@ class CheckRegistry:
     def target(self) -> str:
         return TARGET_DB_TYPE
 
-    def load(self) -> tuple[PlanCheck, ...]:
-        return load_checks(TARGET_DB_TYPE, self._db_path)
+    def load(
+        self,
+        relation_indexes: dict[str, list[dict[str, Any]]] | None = None,
+    ) -> tuple[PlanCheck, ...]:
+        return load_checks(
+            TARGET_DB_TYPE,
+            self._db_path,
+            relation_indexes=relation_indexes,
+        )
 
     def load_fields(self) -> dict[str, str]:
         return load_plan_fields(TARGET_DB_TYPE, self._db_path)

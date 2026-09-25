@@ -46,6 +46,7 @@ produced by an independent, pluggable `PlanCheck`:
 | `NestedLoopCheck`        | Nested Loop with a high number of inner iterations      |
 | `EstimateMismatchCheck`  | Planner cardinality misestimate                         |
 | `PartitionPruningCheck`  | `Append` over many partitions — pruning may have failed |
+| `NonSargableCheck`       | Predicate wraps an indexed column in a function         |
 
 To add a new check, implement the `PlanCheck` protocol in
 `src/pg_explain_mcp/analyzer.py`, register the class in
@@ -100,14 +101,14 @@ pytest -v
 The server reads PostgreSQL connection parameters from environment
 variables:
 
-| Variable      | Default     | Description          |
-|---------------|-------------|----------------------|
-| `PG_HOST`     | `localhost` | PostgreSQL host      |
-| `PG_PORT`     | `5432`      | PostgreSQL port      |
-| `PG_USER`     | `postgres`  | Database user        |
-| `PG_PASSWORD` | —           | Database password    |
-| `PG_DATABASE` | `postgres`  | Database name        |
-
+| Variable         | Default     | Description                |
+|------------------|-------------|----------------------------|
+| `PG_HOST`        | `localhost` | PostgreSQL host            |
+| `PG_PORT`        | `5432`      | PostgreSQL port            |
+| `PG_USER`        | `postgres`  | Database user              |
+| `PG_PASSWORD`    | —           | Database password          |
+| `PG_DATABASE`    | `postgres`  | Database name              |
+| `TARGET_DB_TYPE` | `postgres`  | Database (pg/orcl/mysql..) |
 ### Check registry
 
 Enabled checks and their thresholds live in a small SQLite database at
@@ -271,7 +272,8 @@ check, with the raw tool output and analysis:
 | `NestedLoopCheck`      | 100 vs. 5000 inner iterations                                         |
 | `BitmapHeapScanCheck`  | narrow vs. wide range on the same table                               |
 | `EstimateMismatchCheck`| norm, norm+index, skewed, skewed-other-value                          |
-| `PartitionPruningCheck` | range predicate vs. non-sargable predicate on partitioned table      |
+| `PartitionPruningCheck`| range predicate vs. non-sargable predicate on partitioned table       |
+| `NonSargableCheck`     | sargable vs. non-sargable predicate on indexed column                 |
 
 See [`usage_examples/`](usage_examples/) for the full index, the test
 environment, and prompting tips.

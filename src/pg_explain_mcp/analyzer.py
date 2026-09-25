@@ -5,6 +5,7 @@ checks (adapters) to every node. To add a new check, implement the
 ``PlanCheck`` protocol and register the instance in ``DEFAULT_CHECKS``.
 """
 
+import re
 from dataclasses import asdict, dataclass, replace
 from typing import Any, Protocol
 
@@ -149,7 +150,11 @@ class EstimateMismatchCheck:
 
         if planned <= 0 or actual <= 0:
             return []
-        if max(planned, actual) < self.min_rows:
+
+        # Require both sides to be meaningful in absolute terms.
+        # A huge ratio on tiny numbers (5000 vs 1) is noise: even with a
+        # perfect estimate the plan would not have changed materially.
+        if planned < self.min_rows or actual < self.min_rows:
             return []
 
         ratio = max(planned, actual) / min(planned, actual)
@@ -167,9 +172,12 @@ class EstimateMismatchCheck:
                 message=(
                     f"Planner misestimated cardinality on '{node_type}'{where}: "
                     f"expected {planned}, got {actual} (ratio x{ratio:.1f}). "
-                    "Consider running ANALYZE."
-                ),
-                node=node_type,
+                    "Investigate why: stale statistics, a non-sargable "
+                    "predicate on the column, or a distribution not covered "
+                    "by the column histogram. ANALYZE helps only in the "
+                "first case."
+            ),
+            node=node_type,
             )
         ]
 
@@ -541,6 +549,152 @@ class PartitionPruningCheck:
                 node=node.get("Node Type"),
             )
         ]
+
+class NonSargableCheck:
+    """Non-sargable predicate on a column that has a plain index.
+
+    A predicate like ``lower(email) = 'x'`` wraps the column in a
+    function. The planner cannot use a plain index on ``email`` for
+    such a predicate — it has to evaluate the function for every row.
+    If the column is indexed, the index exists but is unusable for
+    this query.
+
+    The check does not use a whitelist of function names — that would
+    miss user-defined functions and any builtin we forgot. Instead it
+    looks for the pattern ``<word>(<column>`` in the ``Filter``
+    string, using the list of columns covered by plain (non-functional)
+    indexes on the relation.
+
+    Functional indexes themselves are not our concern: if a functional
+    index exists on the exact expression, the planner uses it, and the
+    predicate appears in ``Index Cond`` rather than ``Filter``. Such
+    cases are ignored.
+    """
+
+    name = "NonSargableCheck"
+    type = "non_sargable"
+
+    def __init__(
+        self,
+        threshold_rows: int = 1000,
+        relation_indexes: dict[str, list[dict[str, Any]]] | None = None,
+    ) -> None:
+        self.threshold_rows = threshold_rows
+        self.relation_indexes = relation_indexes or {}
+
+    def check(self, node: dict[str, Any]) -> list[Issue]:
+        filter_str = node.get("Filter", "")
+        if not filter_str:
+            return []
+
+        actual = node.get("Actual Rows", 0)
+        removed = node.get("Rows Removed by Filter", 0)
+        if actual + removed < self.threshold_rows:
+            return []
+
+        relation = node.get("Relation Name", "?")
+        indexed_columns = self._plain_indexed_columns(relation)
+        if not indexed_columns:
+            return []
+
+        for column in indexed_columns:
+            func = self._wrapped_in_function(filter_str, column)
+            if func is None:
+                continue
+
+            return [
+                Issue(
+                    severity=SEVERITY_INFO,
+                    type=self.type,
+                    message=(
+                        f"Non-sargable predicate on '{relation}': the "
+                        f"filter wraps '{column}' in '{func}(...)', so "
+                        f"the index on '{column}' cannot be used. "
+                        f"Consider a functional index on the exact "
+                        f"expression, or rewriting the predicate. "
+                        f"Filter: {filter_str}"
+                    ),
+                    node=node.get("Node Type"),
+                )
+            ]
+
+        return []
+
+    def _plain_indexed_columns(self, relation: str) -> set[str]:
+        """Return columns that a plain ``col = value`` predicate can use.
+
+        A column qualifies only if it is the **leading** column of an
+        index and that slot is a plain column, not an expression. Two
+        cases are excluded:
+
+        - functional indexes (``lower(email)``) — planner would not put
+          the predicate in ``Filter`` if such an index existed for the
+          expression, so those never reach this check in practice;
+        - non-leading columns of composite indexes (``email`` in
+          ``(status, email)``) — a rewrite to ``email = value`` would not
+          use the index.
+        """
+        indexes = self.relation_indexes.get(relation, [])
+        columns: set[str] = set()
+        for idx in indexes:
+            leading = idx.get("leading_attnum")
+            if leading in (None, 0):
+                continue
+            plain = idx.get("plain_columns") or []
+            if not plain:
+                continue
+            columns.add(plain[0])
+
+        return columns
+
+    def _wrapped_in_function(
+        self, filter_str: str, column: str,
+    ) -> str | None:
+        """Return a function name if ``column`` appears inside its parens.
+
+        Scans every ``word(`` occurrence in the filter and, for each one,
+        inspects the contents up to the matching ``)``. If the column
+        appears as a whole word anywhere inside, the predicate is
+        non-sargable on that column.
+
+        This catches:
+
+        - ``lower(email)`` — column is the first argument;
+        - ``date_trunc('month', ts)`` — column is not the first argument;
+        - ``extract(month from ts)`` — special FROM syntax;
+        - ``lower(users.email)`` — table-qualified name;
+        - ``lower(coalesce(email, ''))`` — nested calls, since the inner
+          ``coalesce`` will also be visited.
+
+        It does not flag:
+
+        - ``email = 'x'`` — no function wrapping;
+        - ``email IS NOT NULL`` — no ``word(`` pattern;
+        - ``email = ANY(ARRAY[...])`` — ``array`` is on the right-hand
+          side; the column does not appear inside ``any(...)``.
+        """
+        for m in re.finditer(r"\b(\w+)\s*\(", filter_str, re.IGNORECASE):
+            func = m.group(1)
+            if func.lower() in ("array", "row", "values"):
+                continue
+
+            # Scan forward to the matching close paren.
+            start = m.end()
+            depth = 1
+            i = start
+            while i < len(filter_str) and depth > 0:
+                if filter_str[i] == "(":
+                    depth += 1
+                elif filter_str[i] == ")":
+                    depth -= 1
+                i += 1
+
+            inner = filter_str[start:i - 1] if depth == 0 else filter_str[start:]
+
+            if re.search(rf"\b{re.escape(column)}\b", inner, re.IGNORECASE):
+                return func
+
+        return None
 
 # ---------------------------------------------------------------------------
 # Traversal and reporting

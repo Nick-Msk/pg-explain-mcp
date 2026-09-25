@@ -7,6 +7,7 @@ from pg_explain_mcp.analyzer import (
     EstimateMismatchCheck,
     IndexScanCheck,
     NestedLoopCheck,
+    NonSargableCheck,
     PartitionPruningCheck,
     SeqScanCheck,
     analyze_plan,
@@ -97,10 +98,15 @@ class TestEstimateMismatchCheck:
         assert EstimateMismatchCheck().check(node) == []
 
     def test_large_mismatch_is_reported(self):
-        node = {"Node Type": "Hash Join", "Plan Rows": 100, "Actual Rows": 5000}
+        node = {
+            "Node Type": "Hash Join",
+            "Plan Rows": 1000,
+            "Actual Rows": 50_000,
+        }
         issues = EstimateMismatchCheck().check(node)
         assert len(issues) == 1
         assert issues[0].type == "estimate_mismatch"
+        assert "Investigate why" in issues[0].message
 
     def test_missing_values_do_not_crash(self):
         assert EstimateMismatchCheck().check({"Node Type": "X"}) == []
@@ -117,6 +123,18 @@ class TestEstimateMismatchCheck:
         assert len(issues) == 1
         assert issues[0].type == "estimate_mismatch"
 
+    def test_small_actual_is_ignored(self):
+        """Plan 5000, actual 1 — ratio huge but absolute numbers tiny."""
+        node = {"Node Type": "Gather", "Plan Rows": 5000, "Actual Rows": 1}
+        assert EstimateMismatchCheck().check(node) == []
+
+    def test_small_planned_is_ignored(self):
+        node = {"Node Type": "Gather", "Plan Rows": 1, "Actual Rows": 5000}
+        assert EstimateMismatchCheck().check(node) == []
+
+    def test_both_above_threshold_is_reported(self):
+        node = {"Node Type": "Seq Scan", "Plan Rows": 5000, "Actual Rows": 200_000}
+        assert len(EstimateMismatchCheck().check(node)) == 1
 
 class TestDiskSpillSortCheck:
     def test_in_memory_sort_is_ok(self):
@@ -432,6 +450,315 @@ class TestPartitionPruningCheck:
         # preview is empty, but the message must still be well-formed
         assert "Scanned: " in issues[0].message
 
+class TestNonSargableCheck:
+    """Tests for NonSargableCheck.
+
+    ``relation_indexes`` shape:
+
+        {
+            "users": [
+                {"leading_attnum": 2, "plain_columns": ["email"]},
+                {"leading_attnum": 1, "plain_columns": ["id", "status"]},
+            ],
+        }
+
+    A plain column is "usable" only if it is the **leading** slot of an
+    index and that slot is a real column, not an expression.
+    """
+
+    # ----- helpers ----------------------------------------------------------
+
+    @staticmethod
+    def _indexes(relation: str, *specs: dict) -> dict:
+        return {relation: list(specs)}
+
+    # ----- negative cases ---------------------------------------------------
+
+    def test_sargable_predicate_is_ok(self):
+        check = NonSargableCheck(
+            relation_indexes=self._indexes(
+                "users",
+                {"leading_attnum": 2, "plain_columns": ["email"]},
+            ),
+        )
+        node = {
+            "Node Type": "Seq Scan",
+            "Relation Name": "users",
+            "Actual Rows": 100,
+            "Rows Removed by Filter": 9900,
+            "Filter": "(email = 'x'::text)",
+        }
+        assert check.check(node) == []
+
+    def test_no_index_on_column_is_ok(self):
+        """No index on the column — SeqScanCheck's job, not ours."""
+        check = NonSargableCheck(
+            relation_indexes=self._indexes(
+                "users",
+                {"leading_attnum": 1, "plain_columns": ["id"]},
+            ),
+        )
+        node = {
+            "Node Type": "Seq Scan",
+            "Relation Name": "users",
+            "Actual Rows": 100,
+            "Rows Removed by Filter": 9900,
+            "Filter": "(lower(email) = 'x'::text)",
+        }
+        assert check.check(node) == []
+
+    def test_non_leading_column_is_ignored(self):
+        """Index (status, email) — email is second; rewrite won't help."""
+        check = NonSargableCheck(
+            relation_indexes=self._indexes(
+                "users",
+                {"leading_attnum": 1, "plain_columns": ["status", "email"]},
+            ),
+        )
+        node = {
+            "Node Type": "Seq Scan",
+            "Relation Name": "users",
+            "Actual Rows": 100,
+            "Rows Removed by Filter": 9900,
+            "Filter": "(lower(email) = 'x'::text)",
+        }
+        assert check.check(node) == []
+
+    def test_functional_index_is_ignored(self):
+        """Functional index on lower(email) — leading_attnum = 0."""
+        check = NonSargableCheck(
+            relation_indexes=self._indexes(
+                "users",
+                {"leading_attnum": 0, "plain_columns": []},
+            ),
+        )
+        node = {
+            "Node Type": "Seq Scan",
+            "Relation Name": "users",
+            "Actual Rows": 100,
+            "Rows Removed by Filter": 9900,
+            "Filter": "(lower(email) = 'x'::text)",
+        }
+        assert check.check(node) == []
+
+    def test_small_scan_is_ignored(self):
+        check = NonSargableCheck(
+            relation_indexes=self._indexes(
+                "users",
+                {"leading_attnum": 2, "plain_columns": ["email"]},
+            ),
+        )
+        node = {
+            "Node Type": "Seq Scan",
+            "Relation Name": "users",
+            "Actual Rows": 5,
+            "Rows Removed by Filter": 5,
+            "Filter": "(lower(email) = 'x'::text)",
+        }
+        assert check.check(node) == []
+
+    def test_no_filter_is_ignored(self):
+        check = NonSargableCheck(
+            relation_indexes=self._indexes(
+                "users",
+                {"leading_attnum": 2, "plain_columns": ["email"]},
+            ),
+        )
+        node = {
+            "Node Type": "Seq Scan",
+            "Relation Name": "users",
+            "Actual Rows": 5000,
+        }
+        assert check.check(node) == []
+
+    def test_any_array_is_not_flagged(self):
+        """``email = ANY(ARRAY[...])`` — column is outside ``any(...)``."""
+        check = NonSargableCheck(
+            relation_indexes=self._indexes(
+                "users",
+                {"leading_attnum": 2, "plain_columns": ["email"]},
+            ),
+        )
+        node = {
+            "Node Type": "Seq Scan",
+            "Relation Name": "users",
+            "Actual Rows": 100,
+            "Rows Removed by Filter": 9900,
+            "Filter": "(email = ANY ('{a,b,c}'::text[]))",
+        }
+        assert check.check(node) == []
+
+    def test_is_not_null_is_not_flagged(self):
+        check = NonSargableCheck(
+            relation_indexes=self._indexes(
+                "users",
+                {"leading_attnum": 2, "plain_columns": ["email"]},
+            ),
+        )
+        node = {
+            "Node Type": "Seq Scan",
+            "Relation Name": "users",
+            "Actual Rows": 100,
+            "Rows Removed by Filter": 9900,
+            "Filter": "(email IS NOT NULL)",
+        }
+        assert check.check(node) == []
+
+    # ----- positive cases ---------------------------------------------------
+
+    def test_lower_with_index_is_reported(self):
+        check = NonSargableCheck(
+            relation_indexes=self._indexes(
+                "users",
+                {"leading_attnum": 2, "plain_columns": ["email"]},
+            ),
+        )
+        node = {
+            "Node Type": "Seq Scan",
+            "Relation Name": "users",
+            "Actual Rows": 100,
+            "Rows Removed by Filter": 9900,
+            "Filter": "(lower(email) = 'x'::text)",
+        }
+        issues = check.check(node)
+        assert len(issues) == 1
+        assert issues[0].type == "non_sargable"
+        assert issues[0].severity == "info"
+        assert "lower" in issues[0].message
+        assert "email" in issues[0].message
+
+    def test_extract_from_syntax_is_detected(self):
+        """``extract(month FROM ts)`` — special FROM syntax."""
+        check = NonSargableCheck(
+            relation_indexes=self._indexes(
+                "events",
+                {"leading_attnum": 2, "plain_columns": ["ts"]},
+            ),
+        )
+        node = {
+            "Node Type": "Seq Scan",
+            "Relation Name": "events",
+            "Actual Rows": 100,
+            "Rows Removed by Filter": 9900,
+            "Filter": "(EXTRACT(month FROM ts) = '6'::numeric)",
+        }
+        issues = check.check(node)
+        assert len(issues) == 1
+        assert "extract" in issues[0].message.lower()
+        assert "ts" in issues[0].message
+
+    def test_date_trunc_column_in_second_argument(self):
+        """Column is not the first argument — still non-sargable."""
+        check = NonSargableCheck(
+            relation_indexes=self._indexes(
+                "events",
+                {"leading_attnum": 2, "plain_columns": ["ts"]},
+            ),
+        )
+        node = {
+            "Node Type": "Seq Scan",
+            "Relation Name": "events",
+            "Actual Rows": 100,
+            "Rows Removed by Filter": 9900,
+            "Filter": "(date_trunc('month'::text, ts) = '2026-06-01'::date)",
+        }
+        issues = check.check(node)
+        assert len(issues) == 1
+        assert "date_trunc" in issues[0].message
+
+    def test_table_qualified_column(self):
+        """PostgreSQL emits ``users.email`` in self-joins."""
+        check = NonSargableCheck(
+            relation_indexes=self._indexes(
+                "users",
+                {"leading_attnum": 2, "plain_columns": ["email"]},
+            ),
+        )
+        node = {
+            "Node Type": "Seq Scan",
+            "Relation Name": "users",
+            "Actual Rows": 100,
+            "Rows Removed by Filter": 9900,
+            "Filter": "(lower(users.email) = 'x'::text)",
+        }
+        assert len(check.check(node)) == 1
+
+    def test_schema_qualified_column(self):
+        """PostgreSQL may emit ``schema.table.column`` in filters."""
+        check = NonSargableCheck(
+            relation_indexes=self._indexes(
+                "users",
+                {"leading_attnum": 2, "plain_columns": ["email"]},
+            ),
+        )
+        node = {
+            "Node Type": "Seq Scan",
+            "Relation Name": "users",
+            "Actual Rows": 100,
+            "Rows Removed by Filter": 9900,
+            "Filter": "(lower(public.users.email) = 'x'::text)",
+        }
+        assert len(check.check(node)) == 1
+
+    def test_custom_function_is_detected(self):
+        """User-defined functions are caught too — no whitelist."""
+        check = NonSargableCheck(
+            relation_indexes=self._indexes(
+                "users",
+                {"leading_attnum": 2, "plain_columns": ["email"]},
+            ),
+        )
+        node = {
+            "Node Type": "Seq Scan",
+            "Relation Name": "users",
+            "Actual Rows": 100,
+            "Rows Removed by Filter": 9900,
+            "Filter": "(my_hash(email) = 'x'::text)",
+        }
+        issues = check.check(node)
+        assert len(issues) == 1
+        assert "my_hash" in issues[0].message
+
+    def test_composite_index_with_leading_column(self):
+        """``(email, created_at)`` — email is leading, usable."""
+        check = NonSargableCheck(
+            relation_indexes=self._indexes(
+                "users",
+                {"leading_attnum": 2, "plain_columns": ["email", "created_at"]},
+            ),
+        )
+        node = {
+            "Node Type": "Seq Scan",
+            "Relation Name": "users",
+            "Actual Rows": 100,
+            "Rows Removed by Filter": 9900,
+            "Filter": "(lower(email) = 'x'::text)",
+        }
+        assert len(check.check(node)) == 1
+
+    def test_custom_threshold(self):
+        check = NonSargableCheck(
+            threshold_rows=5000,
+            relation_indexes=self._indexes(
+                "users",
+                {"leading_attnum": 2, "plain_columns": ["email"]},
+            ),
+        )
+        node = {
+            "Node Type": "Seq Scan",
+            "Relation Name": "users",
+            "Actual Rows": 100,
+            "Rows Removed by Filter": 9900,
+            "Filter": "(lower(email) = 'x'::text)",
+        }
+        # total_read = 10000 > threshold 5000 → fires
+        assert len(check.check(node)) == 1
+
+        node["Actual Rows"] = 10
+        node["Rows Removed by Filter"] = 100
+        # total_read = 110 < threshold 5000 → silent
+        assert check.check(node) == []
+
 class TestSummarizePlanNode:
     FIELDS = {
         "Relation Name":  "relation",
@@ -653,65 +980,94 @@ class TestAnalyzePlan:
 # list_indexes formatting
 # ---------------------------------------------------------------------------
 
-
 class TestFormatIndexes:
     def test_empty_list(self):
         assert _format_indexes([]) == "No indexes found."
 
     def test_regular_index(self):
-        rows = [
-            {
-                "schema_name": "public",
-                "table_name": "orders",
-                "index_name": "idx_orders_status",
-                "is_unique": False,
-                "is_primary": False,
-                "columns": ["status"],
-            }
-        ]
+        rows = [{
+            "schema_name": "public",
+            "table_name": "orders",
+            "index_name": "idx_orders_status",
+            "index_def": "CREATE INDEX idx_orders_status ON orders USING btree (status)",
+            "is_unique": False,
+            "is_primary": False,
+            "is_functional": False,
+            "leading_attnum": 1,
+            "plain_columns": ["status"],
+        }]
         result = _format_indexes(rows)
         assert "idx_orders_status" in result
         assert "[INDEX]" in result
         assert "status" in result
 
     def test_unique_index(self):
-        rows = [
-            {
-                "schema_name": "public",
-                "table_name": "users",
-                "index_name": "idx_users_email",
-                "is_unique": True,
-                "is_primary": False,
-                "columns": ["email"],
-            }
-        ]
-        result = _format_indexes(rows)
-        assert "[UNIQUE]" in result
+        rows = [{
+            "schema_name": "public",
+            "table_name": "users",
+            "index_name": "idx_users_email",
+            "index_def": (
+                "CREATE UNIQUE INDEX idx_users_email",
+                " ON users USING btree (email)"
+            ),
+            "is_unique": True,
+            "is_primary": False,
+            "is_functional": False,
+            "leading_attnum": 2,
+            "plain_columns": ["email"],
+        }]
+        assert "[UNIQUE]" in _format_indexes(rows)
 
     def test_primary_key(self):
-        rows = [
-            {
-                "schema_name": "public",
-                "table_name": "users",
-                "index_name": "users_pkey",
-                "is_unique": True,
-                "is_primary": True,
-                "columns": ["id"],
-            }
-        ]
+        rows = [{
+            "schema_name": "public",
+            "table_name": "users",
+            "index_name": "users_pkey",
+            "index_def": (
+                "CREATE UNIQUE INDEX users_pkey ON"
+                " users USING btree (id)"
+            ),
+            "is_unique": True,
+            "is_primary": True,
+            "is_functional": False,
+            "leading_attnum": 1,
+            "plain_columns": ["id"],
+        }]
+        assert "[PRIMARY KEY]" in _format_indexes(rows)
+
+    def test_functional_index(self):
+        rows = [{
+            "schema_name": "public",
+            "table_name": "users",
+            "index_name": "idx_lower_email",
+            "index_def": (
+                 "CREATE INDEX idx_lower_email ON "
+                 "public.users USING btree (lower(email))"
+            ),
+            "is_unique": False,
+            "is_primary": False,
+            "is_functional": True,
+            "leading_attnum": 0,
+            "plain_columns": [],
+        }]
         result = _format_indexes(rows)
-        assert "[PRIMARY KEY]" in result
+        assert "[FUNCTIONAL]" in result
+        assert "lower(email)" in result
 
     def test_composite_index(self):
-        rows = [
-            {
-                "schema_name": "public",
-                "table_name": "orders",
-                "index_name": "idx_orders_status_created",
-                "is_unique": False,
-                "is_primary": False,
-                "columns": ["status", "created_at"],
-            }
-        ]
-        result = _format_indexes(rows)
-        assert "status, created_at" in result
+        rows = [{
+            "schema_name": "public",
+            "table_name": "orders",
+            "index_name": "idx_orders_status_created",
+            "index_def": (
+                "CREATE INDEX idx_orders_status_created ON orders "
+                "USING btree (status, created_at)"
+            ),
+            "is_unique": False,
+            "is_primary": False,
+            "is_functional": False,
+            "leading_attnum": 1,
+            "plain_columns": ["status", "created_at"],
+        }]
+        assert "status, created_at" in _format_indexes(rows)
+
