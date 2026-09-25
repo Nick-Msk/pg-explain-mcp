@@ -51,6 +51,43 @@ class PlanCheck(Protocol):
 # Checks (adapters)
 # ---------------------------------------------------------------------------
 
+class PlanCheckBase:
+    """Base class for PlanCheck implementations.
+
+    Concrete checks implement three phases:
+
+    - ``gather_info(node)`` extracts the values needed to decide.
+      Return ``None`` if the node is not applicable (wrong node type,
+      missing fields, etc.). The returned dict is a private contract
+      of the check — document its keys in the docstring.
+    - ``validate_rule(info)`` returns True if the check should fire.
+    - ``generate_msg(info)`` returns the issues for a positive match.
+
+    ``check()`` runs the three phases in order and short-circuits as
+    soon as a phase returns nothing.
+    """
+
+    name: str
+    type: str
+
+    def check(self, node: dict[str, Any]) -> list[Issue]:
+        info = self.gather_info(node)
+        if info is None or not self.validate_rule(info):
+            return []
+        return self.generate_msg(info)
+
+    # Subclasses override:
+
+    def gather_info(self, node: dict[str, Any]) -> dict[str, Any] | None:
+        raise NotImplementedError
+
+    def validate_rule(self, info: dict[str, Any]) -> bool:
+        raise NotImplementedError
+
+    def generate_msg(self, info: dict[str, Any]) -> list[Issue]:
+        raise NotImplementedError
+
+
 class SeqScanCheck:
     """Sequential scan that discards most of what it reads.
 
@@ -120,17 +157,14 @@ class SeqScanCheck:
             )
         ]
 
-class EstimateMismatchCheck:
-    """Large mismatch between planner estimate and actual row counts.
+class EstimateMismatchCheck(PlanCheckBase):
+    """Planner cardinality misestimate.
 
-    The check has two thresholds:
-    - a relative one (``THRESHOLD_RATIO``) — the misestimate ratio, and
-    - an absolute one (``MIN_ROWS``) — the minimum number of actual rows
-      for the ratio to be meaningful.
-
-    Small absolute numbers (e.g. 4 vs 83) produce high ratios but are
-    irrelevant for planning and usually indicate stale statistics on
-    tiny subsets, not a real problem.
+    Fires when both ``planned`` and ``actual`` exceed ``min_rows`` and
+    the ratio between them exceeds ``threshold_ratio``. The
+    ``min_rows`` floor on **both** sides suppresses low-signal ratios
+    on tiny absolute numbers (5000 vs. 1), where a perfect estimate
+    would not have changed the plan anyway.
     """
 
     name = "EstimateMismatchCheck"
@@ -144,40 +178,49 @@ class EstimateMismatchCheck:
         self.threshold_ratio = threshold_ratio
         self.min_rows = min_rows
 
-    def check(self, node: dict[str, Any]) -> list[Issue]:
+    def gather_info(self, node: dict[str, Any]) -> dict[str, Any] | None:
+        """Return ``{planned, actual, ratio, node_type, relation}``.
+
+        ``None`` if either side is zero or negative.
+        """
         planned = node.get("Plan Rows", 0)
         actual = node.get("Actual Rows", 0)
-
         if planned <= 0 or actual <= 0:
-            return []
+            return None
+        return {
+            "planned": planned,
+            "actual": actual,
+            "ratio": max(planned, actual) / min(planned, actual),
+            "node_type": node.get("Node Type", ""),
+            "relation": node.get("Relation Name", ""),
+        }
 
-        # Require both sides to be meaningful in absolute terms.
-        # A huge ratio on tiny numbers (5000 vs 1) is noise: even with a
-        # perfect estimate the plan would not have changed materially.
-        if planned < self.min_rows or actual < self.min_rows:
-            return []
+    def validate_rule(self, info: dict[str, Any]) -> bool:
+        if info["planned"] < self.min_rows:
+            return False
+        if info["actual"] < self.min_rows:
+            return False
+        if info["ratio"] <= self.threshold_ratio:
+            return False
+        return True
 
-        ratio = max(planned, actual) / min(planned, actual)
-        if ratio <= self.threshold_ratio:
-            return []
-
-        node_type = node.get("Node Type", "")
-        relation = node.get("Relation Name", "")
-        where = f" on '{relation}'" if relation else ""
-
+    def generate_msg(self, info: dict[str, Any]) -> list[Issue]:
+        where = f" on '{info['relation']}'" if info["relation"] else ""
         return [
             Issue(
                 severity=SEVERITY_WARNING,
                 type=self.type,
                 message=(
-                    f"Planner misestimated cardinality on '{node_type}'{where}: "
-                    f"expected {planned}, got {actual} (ratio x{ratio:.1f}). "
+                    f"Planner misestimated cardinality on "
+                    f"'{info['node_type']}'{where}: "
+                    f"expected {info['planned']}, got {info['actual']} "
+                    f"(ratio x{info['ratio']:.1f}). "
                     "Investigate why: stale statistics, a non-sargable "
-                    "predicate on the column, or a distribution not covered "
-                    "by the column histogram. ANALYZE helps only in the "
-                    "first case."
-            ),
-            node=node_type,
+                    "predicate on the column, or a distribution not "
+                    "covered by the column histogram. ANALYZE helps "
+                    "only in the first case."
+                ),
+                node=info["node_type"],
             )
         ]
 
