@@ -111,6 +111,15 @@ if planned < self.min_rows or actual < self.min_rows:
 
 `planned = 505 < min_rows = 1000`. The check returns silently.
 
+### another variant: `val = 144`
+
+The same query against a value that does not exist in the table
+returns 0 rows. `EstimateMismatchCheck` still stays silent, but for
+a different reason — `actual = 0` triggers the early bail-out in
+`gather_info` (`actual <= 0`), before the ratio is even computed.
+`SeqScanCheck` fires, because the scan still reads 1M rows and
+discards all of them.
+
 ### why this is the right behaviour
 
 `EstimateMismatchCheck` is not a hunt for "any large ratio". It
@@ -159,6 +168,7 @@ so the skewed state survives across runs.
 | [scenario 1](sample_estimate_mismatch_on_norm.md) | `val = 42` on norm table | 9,033 | 9,852 | — |
 | [scenario 2](sample_estimate_mismatch_on_skewed.md) | `val = 42` on skewed table | 950,000 | 10,050 | **fires** |
 | **this file** | `val = 44` on skewed table | 505 | 9,887 | — |
+| same query, `val = 144` | 505 | 0 | — |
 | [scenario 4](sample_estimate_mismatch_on_norm_indexed.md) | `val = 42` on indexed norm | 9,933 | 10,013 | — |
 
 Scenario 2 is the only one where a correct estimate would have
