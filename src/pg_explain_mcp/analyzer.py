@@ -91,26 +91,36 @@ class PlanCheckBase(ABC):
         ...
 
 
-class SeqScanCheck:
+class SeqScanCheck(PlanCheckBase):
     """Sequential scan that discards most of what it reads.
 
     A Seq Scan is not a problem by itself. It becomes one when the
     planner reads many rows only to throw most of them away — usually
     a sign that an index on the filter column might help.
 
-    The check therefore ignores:
+    The check ignores:
 
-    - small scans (below ``THRESHOLD_ROWS``);
-    - scans with **no** filter (``Rows Removed by Filter`` is 0) —
-      reading the whole table is the only reasonable strategy here,
-      and an index would not change the plan;
-    - scans where the filter rejects less than ``MIN_FILTER_RATIO`` of
+    - small scans (below ``threshold_rows``);
+    - scans with no filter (``Rows Removed by Filter = 0``) — reading
+      the whole table is the only reasonable strategy here, and an
+      index would not change the plan;
+    - scans where the filter rejects less than ``min_filter_ratio`` of
       the rows read — an index rarely beats a Seq Scan at moderate
       selectivity.
 
-    The message is intentionally neutral: it points the reader (or the
-    LLM) at the filter column and asks them to verify whether an index
-    already exists, rather than blindly recommending one.
+    ``gather_info`` returns:
+
+        {
+            "actual":     float,   # rows returned by the scan
+            "removed":    float,   # rows discarded by the filter
+            "total_read": float,   # actual + removed
+            "ratio":      float,   # removed / total_read, in [0, 1]
+            "relation":   str,
+        }
+
+    Fires at ``WARNING`` level. The message is deliberately neutral:
+    it asks the caller to verify whether an index already exists,
+    rather than instructing to create one.
     """
 
     name = "SeqScanCheck"
@@ -124,32 +134,43 @@ class SeqScanCheck:
         self.threshold_rows = threshold_rows
         self.min_filter_ratio = min_filter_ratio
 
-    def check(self, node: dict[str, Any]) -> list[Issue]:
+    def gather_info(self, node: dict[str, Any]) -> dict[str, Any] | None:
         if node.get("Node Type") != "Seq Scan":
-            return []
+            return None
 
         actual = node.get("Actual Rows", 0)
         removed = node.get("Rows Removed by Filter", 0)
         total_read = actual + removed
+        if total_read <= 0:
+            return None
 
-        if total_read <= self.threshold_rows:
-            return []
+        return {
+            "actual": actual,
+            "removed": removed,
+            "total_read": total_read,
+            "ratio": removed / total_read,
+            "relation": node.get("Relation Name", "?"),
+        }
 
-        if removed == 0:
-            return []
+    def validate_rule(self, info: dict[str, Any]) -> bool:
+        if info["total_read"] <= self.threshold_rows:
+            return False
+        if info["removed"] == 0:
+            return False
+        return info["ratio"] >= self.min_filter_ratio
 
-        if removed / total_read < self.min_filter_ratio:
-            return []
-
-        relation = node.get("Relation Name", "?")
+    def generate_msg(self, info: dict[str, Any]) -> list[Issue]:
+        pct = info["ratio"] * 100
         return [
             Issue(
                 severity=SEVERITY_WARNING,
                 type=self.type,
                 message=(
-                    f"Sequential scan on '{relation}' read {total_read} rows "
-                    f"({actual} returned, {removed} filtered out, "
-                    f"{removed / total_read * 100:.1f}% discarded). "
+                    f"Sequential scan on '{info['relation']}' read "
+                    f"{info['total_read']} rows "
+                    f"({info['actual']} returned, "
+                    f"{info['removed']} filtered out, "
+                    f"{pct:.1f}% discarded). "
                     "Verify whether an index on the filter column exists; "
                     "if it does, investigate why the planner ignored it "
                     "(stale statistics, low correlation, or high "

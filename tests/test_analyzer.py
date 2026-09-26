@@ -92,6 +92,44 @@ class TestSeqScanCheck:
         assert len(issues) == 1
         assert "Verify whether an index" in issues[0].message
 
+    def test_gather_info_returns_none_for_wrong_node(self):
+        check = SeqScanCheck()
+        assert check.gather_info({"Node Type": "Index Scan"}) is None
+
+    def test_gather_info_returns_none_for_empty_scan(self):
+        check = SeqScanCheck()
+        node = {"Node Type": "Seq Scan", "Actual Rows": 0, "Rows Removed by Filter": 0}
+        assert check.gather_info(node) is None
+
+    def test_gather_info_computes_ratio(self):
+        check = SeqScanCheck()
+        info = check.gather_info({
+            "Node Type": "Seq Scan",
+            "Relation Name": "t",
+            "Actual Rows": 100,
+            "Rows Removed by Filter": 900,
+        })
+        assert info["total_read"] == 1000
+        assert info["ratio"] == 0.9   # 900 / 1000 — 90% discarded
+
+    def test_validate_rule_rejects_no_filter(self):
+        check = SeqScanCheck()
+        info = {"actual": 5000.0, "removed": 0.0, "total_read": 5000.0,
+                "ratio": 0.0, "relation": "t"}
+        assert check.validate_rule(info) is False
+
+    def test_validate_rule_rejects_moderate_selectivity(self):
+        check = SeqScanCheck(min_filter_ratio=0.9)
+        info = {"actual": 5000.0, "removed": 5000.0, "total_read": 10000.0,
+                "ratio": 0.5, "relation": "t"}
+        assert check.validate_rule(info) is False
+
+    def test_validate_rule_accepts_high_selectivity(self):
+        check = SeqScanCheck(min_filter_ratio=0.9)
+        info = {"actual": 100.0, "removed": 99900.0, "total_read": 100000.0,
+                "ratio": 0.999, "relation": "t"}
+        assert check.validate_rule(info) is True
+
 class TestEstimateMismatchCheck:
     def test_close_estimate_is_ok(self):
         node = {"Node Type": "Hash Join", "Plan Rows": 100, "Actual Rows": 120}
