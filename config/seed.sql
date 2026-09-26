@@ -17,8 +17,8 @@ insert into checks (num, database, name, check_class, description, enabled) valu
     (4, 'postgres', 'DiskSpillHashCheck',    'GENERAL', 'hash operation using multiple batches',                 1),
     (5, 'postgres', 'NestedLoopCheck',       'GENERAL', 'Nested Loop with many inner iterations',                1),
     (6, 'postgres', 'BitmapHeapScanCheck',   'GENERAL', 'large Bitmap Heap Scan',                                1),
-    (7, 'postgres', 'IndexRegularScanCheck', 'INDEX',   'index scan reading too many blocks for rows returned',  1),
-    (8, 'postgres', 'IndexOnlyScanCheck',    'INDEX',   'index only scan with stale visibility map',             1),
+    (7, 'postgres', 'IndexRegularScanCheck', 'INDEX',   'index scan reading too many blocks for rows returned',  0),
+    (8, 'postgres', 'IndexOnlyScanCheck',    'INDEX',   'index only scan with stale visibility map',             0),
     (9, 'postgres', 'PartitionPruningCheck', 'GENERAL', 'Append over many partitions — pruning may have failed', 1),
     (10,'postgres', 'NonSargableCheck',      'GENERAL', 'non-sargable predicate on an indexed column',           1);
 

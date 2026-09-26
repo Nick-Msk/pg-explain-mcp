@@ -185,7 +185,7 @@ call mcp_explain_tool.fill_bitmap_heap_scan(5000000);
 
 ---
 
-## EstimateMismatchCheck: four scenarios
+## EstimateMismatchCheck: five scenarios
 
 Reproducible scenarios backed by
 `mcp_explain_tool.data_estimate_mismatch_norm` and
@@ -199,10 +199,11 @@ call mcp_explain_tool.fill_estimate_mismatch(1000000);
 
 | Example | What it demonstrates |
 |---|---|
-| [Norm — no index](pg_estimate_mismatch/sample_estimate_mismatch_on_norm.md) | Honest stats, but `seq_scan` fires (99% discarded) |
+| [Norm — no index](pg_estimate_mismatch/sample_estimate_mismatch_on_norm.md) | Honest stats, `seq_scan` fires (99 % discarded) |
 | [Norm + index — clean baseline](pg_estimate_mismatch/sample_estimate_mismatch_on_norm_indexed.md) | Honest stats + index → no issues at all |
-| [Skewed — fake stats for `val = 42`](pg_estimate_mismatch/sample_estimate_mismatch_on_skewed.md) | Ratio ~94.5x, `estimate_mismatch` and `seq_scan` fire together |
+| [Skewed — fake stats for `val = 42`](pg_estimate_mismatch/sample_estimate_mismatch_on_skewed.md) | Ratio ~94.5x, `estimate_mismatch` and `seq_scan` fire |
 | [Skewed — different value `val = 43`](pg_estimate_mismatch/sample_estimate_mismatch_on_skewed_other_value.md) | Ratio ~1.02x, `estimate_mismatch` stays silent |
+| [Skewed — leak on `val = 44`](pg_estimate_mismatch/sample_estimate_mismatch_on_skewed_leak.md) | Ratio ~19.6x, but absolute numbers below `min_rows` — check stays silent |
 
 The skewed fixture uses `pg_restore_attribute_stats()` to overwrite
 statistics for a single value, and disables autovacuum on the table so

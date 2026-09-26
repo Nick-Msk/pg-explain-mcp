@@ -424,11 +424,14 @@ if __name__ == "__main__":
                 print(f"  {r['database']}")
             print("checks:")
             for r in conn.execute(
-                "select num, database, name, enabled from checks "
+                "select num, database, name, check_class, enabled from checks "
                 "order by database, num"
             ):
                 mark = "on " if r["enabled"] else "off"
-                print(f"  {r['database']}  {r['num']:>2}  [{mark}]  {r['name']}")
+                print(
+                    f"  {r['database']}  {r['num']:>2}  [{mark}]"
+                    f"  {r['check_class']:<8} {r['name']}"
+                )
             print("plan fields:")
             for r in conn.execute(
                 "select database, raw, key, enabled from plan_fields "
