@@ -25,7 +25,7 @@ of heap blocks touched.
 
 ```sql
 select *
-from mcp_explain_tool.data_bitmap_heap_scan
+from mcp_explain_tool.data_bitmap_heap_scan_norm
 where val between 500000 and 540000;
 ```
 

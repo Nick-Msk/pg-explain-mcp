@@ -25,7 +25,7 @@ A narrow range (`500000..505000`, ~0.5 % selectivity) returns
 
 ```sql
 select *
-from mcp_explain_tool.data_bitmap_heap_scan
+from mcp_explain_tool.data_bitmap_heap_scan_norm
 where val between 500000 and 505000;
 ```
 

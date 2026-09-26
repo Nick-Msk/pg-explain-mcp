@@ -322,6 +322,23 @@ class TestBitmapHeapScanCheck:
         assert len(issues) == 1
         assert "?" in issues[0].message
 
+    def test_gather_info_returns_none_for_wrong_node(self):
+        check = BitmapHeapScanCheck()
+        assert check.gather_info({"Node Type": "Seq Scan"}) is None
+
+    def test_gather_info_extracts_fields(self):
+        check = BitmapHeapScanCheck()
+        info = check.gather_info({
+            "Node Type": "Bitmap Heap Scan",
+            "Actual Rows": 5000,
+            "Relation Name": "orders",
+        })
+        assert info == {"rows": 5000, "relation": "orders"}
+
+    def test_validate_rule_threshold(self):
+        check = BitmapHeapScanCheck(threshold_rows=1000)
+        assert check.validate_rule({"rows": 1001, "relation": "t"}) is True
+        assert check.validate_rule({"rows": 1000, "relation": "t"}) is False
 
 class TestIndexScanCheck:
     # --- Index Only Scan -------------------------------------------------

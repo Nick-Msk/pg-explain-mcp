@@ -407,42 +407,56 @@ class NestedLoopCheck:
             )
         ]
 
-class BitmapHeapScanCheck:
-    """Bitmap Heap Scan on a large table — check bitmap efficiency.
+class BitmapHeapScanCheck(PlanCheckBase):
+    """Large Bitmap Heap Scan.
 
-    A Bitmap Heap Scan is often chosen when an index would return too many
-    rows for a plain Index Scan. On large tables this can indicate a missing
-    composite index, poor selectivity, or a bloated bitmap.
+    A Bitmap Heap Scan is the right strategy for medium selectivity:
+    too many rows for an index scan, too few for a sequential scan.
+    But when the scan processes a very large number of rows, the heap
+    fetches dominate — often a sign that a composite index or
+    partitioning would reduce the amount of heap I/O.
+
+    ``gather_info`` returns:
+
+        {
+            "rows":     float,
+            "relation": str,
+        }
+
+    Fires at ``INFO`` level: the scan itself is not wrong, it is
+    simply worth investigating at scale.
     """
 
     name = "BitmapHeapScanCheck"
     type = "bitmap_heap_scan"
 
-    def __init__(self, threshold_rows: int = 100000) -> None:
+    def __init__(self, threshold_rows: int = 100_000) -> None:
         self.threshold_rows = threshold_rows
 
-    def check(self, node: dict[str, Any]) -> list[Issue]:
+    def gather_info(self, node: dict[str, Any]) -> dict[str, Any] | None:
         if node.get("Node Type") != "Bitmap Heap Scan":
-            return []
+            return None
+        return {
+            "rows": node.get("Actual Rows", 0),
+            "relation": node.get("Relation Name", "?"),
+        }
 
-        rows = node.get("Actual Rows", 0)
-        if rows <= self.threshold_rows:
-            return []
+    def validate_rule(self, info: dict[str, Any]) -> bool:
+        return info["rows"] > self.threshold_rows
 
-        relation = node.get("Relation Name", "?")
+    def generate_msg(self, info: dict[str, Any]) -> list[Issue]:
         return [
             Issue(
                 severity=SEVERITY_INFO,
                 type=self.type,
                 message=(
-                    f"Bitmap Heap Scan on '{relation}' processed {rows} rows. "
-                    "Consider a composite index or partitioning to reduce "
-                    "the number of heap fetches."
+                    f"Bitmap Heap Scan on '{info['relation']}' processed "
+                    f"{info['rows']} rows. Consider a composite index or "
+                    "partitioning to reduce the number of heap fetches."
                 ),
                 node="Bitmap Heap Scan",
             )
         ]
-
 
 class IndexScanCheck:
     """Index Scan / Index Only Scan with poor heap locality.
