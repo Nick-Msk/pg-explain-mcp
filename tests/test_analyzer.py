@@ -136,6 +136,23 @@ class TestEstimateMismatchCheck:
         node = {"Node Type": "Seq Scan", "Plan Rows": 5000, "Actual Rows": 200_000}
         assert len(EstimateMismatchCheck().check(node)) == 1
 
+    def test_gather_info_none_when_actual_zero(self):
+        check = EstimateMismatchCheck()
+        node = {"Plan Rows": 5000, "Actual Rows": 0}
+        assert check.gather_info(node) is None
+
+    def test_validate_rule_rejects_low_planned(self):
+        check = EstimateMismatchCheck(min_rows=1000)
+        info = {"planned": 100, "actual": 5000, "ratio": 50.0,
+                "node_type": "Seq Scan", "relation": "t"}
+        assert check.validate_rule(info) is False
+
+    def test_validate_rule_accepts_both_sides_above(self):
+        check = EstimateMismatchCheck(min_rows=1000, threshold_ratio=10.0)
+        info = {"planned": 1000, "actual": 50_000, "ratio": 50.0,
+                "node_type": "Seq Scan", "relation": "t"}
+        assert check.validate_rule(info) is True
+
 class TestDiskSpillSortCheck:
     def test_in_memory_sort_is_ok(self):
         node = {"Node Type": "Sort", "Sort Method": "quicksort"}

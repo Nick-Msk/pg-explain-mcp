@@ -6,16 +6,21 @@
 insert into databases (database) values
     ('postgres');
 
-insert into checks (num, database, name, description, enabled) values
-    (1, 'postgres', 'SeqScanCheck',          'sequential scan that discards most rows',        1),
-    (2, 'postgres', 'EstimateMismatchCheck', 'planner cardinality misestimate',                1),
-    (3, 'postgres', 'DiskSpillSortCheck',    'sort spilling to disk',                          1),
-    (4, 'postgres', 'DiskSpillHashCheck',    'hash operation using multiple batches',          1),
-    (5, 'postgres', 'NestedLoopCheck',       'Nested Loop with many inner iterations',         1),
-    (6, 'postgres', 'BitmapHeapScanCheck',   'large Bitmap Heap Scan',                         1),
-    (7, 'postgres', 'IndexScanCheck',        'stale visibility map / poor heap locality',      1),
-    (8, 'postgres', 'PartitionPruningCheck', 'Append over many partitions — pruning may have failed', 1),
-    (9, 'postgres', 'NonSargableCheck', 'non-sargable predicate on an indexed column',         1);
+insert into check_classes (name) values
+    ('GENERAL'),
+    ('INDEX');
+
+insert into checks (num, database, name, check_class, description, enabled) values
+    (1, 'postgres', 'SeqScanCheck',          'GENERAL', 'sequential scan that discards most rows',               1),
+    (2, 'postgres', 'EstimateMismatchCheck', 'GENERAL', 'planner cardinality misestimate',                       1),
+    (3, 'postgres', 'DiskSpillSortCheck',    'GENERAL', 'sort spilling to disk',                                 1),
+    (4, 'postgres', 'DiskSpillHashCheck',    'GENERAL', 'hash operation using multiple batches',                 1),
+    (5, 'postgres', 'NestedLoopCheck',       'GENERAL', 'Nested Loop with many inner iterations',                1),
+    (6, 'postgres', 'BitmapHeapScanCheck',   'GENERAL', 'large Bitmap Heap Scan',                                1),
+    (7, 'postgres', 'IndexRegularScanCheck', 'INDEX',   'index scan reading too many blocks for rows returned',  1),
+    (8, 'postgres', 'IndexOnlyScanCheck',    'INDEX',   'index only scan with stale visibility map',             1),
+    (9, 'postgres', 'PartitionPruningCheck', 'GENERAL', 'Append over many partitions — pruning may have failed', 1),
+    (10,'postgres', 'NonSargableCheck',      'GENERAL', 'non-sargable predicate on an indexed column',           1);
 
 insert into check_params (num, database, param, value, default_value) values
     (1, 'postgres', 'threshold_rows',    '1000',   '1000'),
@@ -28,10 +33,11 @@ insert into check_params (num, database, param, value, default_value) values
     (5, 'postgres', 'threshold_rows',    '100000', '100000'),
     (6, 'postgres', 'threshold_rows',    '100000', '100000'),
     (7, 'postgres', 'min_rows',          '1000',   '1000'),
-    (7, 'postgres', 'heap_fetch_ratio',  '0.10',   '0.10'),
     (7, 'postgres', 'min_disk_blocks',   '100',    '100'),
-    (8, 'postgres', 'max_children',      '3',      '3'),
-    (9, 'postgres', 'threshold_rows',    '1000',   '1000');
+    (8, 'postgres', 'min_rows',          '1000',   '1000'),
+    (8, 'postgres', 'heap_fetch_ratio',  '0.10',   '0.10'),
+    (9, 'postgres', 'max_children',      '3',      '3'),
+    (10,'postgres', 'threshold_rows',    '1000',   '1000');
 
 insert into plan_fields (database, raw, key, enabled) values
     ('postgres', 'Relation Name',          'relation',               1),

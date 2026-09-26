@@ -6,6 +6,7 @@ checks (adapters) to every node. To add a new check, implement the
 """
 
 import re
+from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, replace
 from typing import Any, Protocol
 
@@ -35,36 +36,37 @@ class Issue:
     def with_context(self, depth: int, parent_node: str) -> "Issue":
         return replace(self, depth=depth, parent_node=parent_node)
 
-class PlanCheck(Protocol):
-    """Adapter interface: each check inspects a single plan node.
-
-    Implementations must be stateless (or at least thread-safe) and
-    must never mutate the ``node`` they receive.
-    """
-
-    name: str
-
-    def check(self, node: dict[str, Any]) -> list[Issue]: ...
-
-
 # ---------------------------------------------------------------------------
 # Checks (adapters)
 # ---------------------------------------------------------------------------
 
-class PlanCheckBase:
-    """Base class for PlanCheck implementations.
+class PlanCheck(Protocol):
+    """Structural type for anything the analyzer can run.
 
-    Concrete checks implement three phases:
+    Any object with ``name``, ``type``, and ``check(node)`` satisfies
+    this protocol — no inheritance required. Used for typing in
+    ``analyze_plan`` and ``_walk_plan``.
+    """
 
-    - ``gather_info(node)`` extracts the values needed to decide.
-      Return ``None`` if the node is not applicable (wrong node type,
+    name: str
+    type: str
+
+    def check(self, node: dict[str, Any]) -> list[Issue]:
+        ...
+
+class PlanCheckBase(ABC):
+    """Base for single-rule checks split into three phases.
+
+    - ``gather_info(node)`` extracts values needed to decide. Return
+      ``None`` if the node is not applicable (wrong node type,
       missing fields, etc.). The returned dict is a private contract
-      of the check — document its keys in the docstring.
+      of the check — document its keys in the subclass docstring.
     - ``validate_rule(info)`` returns True if the check should fire.
-    - ``generate_msg(info)`` returns the issues for a positive match.
+    - ``generate_msg(info)`` builds the issues for a positive match.
 
-    ``check()`` runs the three phases in order and short-circuits as
-    soon as a phase returns nothing.
+    ``check()`` runs the phases in order and short-circuits on the
+    first ``None`` or ``False``. Subclasses must implement all three
+    ``@abstractmethod`` — ``ABC`` prevents instantiation otherwise.
     """
 
     name: str
@@ -76,16 +78,17 @@ class PlanCheckBase:
             return []
         return self.generate_msg(info)
 
-    # Subclasses override:
-
+    @abstractmethod
     def gather_info(self, node: dict[str, Any]) -> dict[str, Any] | None:
-        raise NotImplementedError
+        ...
 
+    @abstractmethod
     def validate_rule(self, info: dict[str, Any]) -> bool:
-        raise NotImplementedError
+        ...
 
+    @abstractmethod
     def generate_msg(self, info: dict[str, Any]) -> list[Issue]:
-        raise NotImplementedError
+        ...
 
 
 class SeqScanCheck:
@@ -160,11 +163,21 @@ class SeqScanCheck:
 class EstimateMismatchCheck(PlanCheckBase):
     """Planner cardinality misestimate.
 
+    ``gather_info`` returns:
+
+        {
+            "planned":   int,
+            "actual":    int,
+            "ratio":     float,
+            "node_type": str,
+            "relation":  str,
+        }
+
     Fires when both ``planned`` and ``actual`` exceed ``min_rows`` and
-    the ratio between them exceeds ``threshold_ratio``. The
-    ``min_rows`` floor on **both** sides suppresses low-signal ratios
-    on tiny absolute numbers (5000 vs. 1), where a perfect estimate
-    would not have changed the plan anyway.
+    the ratio between them exceeds ``threshold_ratio``. The floor on
+    both sides suppresses low-signal ratios on tiny absolute numbers
+    (5000 vs. 1), where a perfect estimate would not have changed the
+    plan anyway.
     """
 
     name = "EstimateMismatchCheck"
@@ -179,10 +192,6 @@ class EstimateMismatchCheck(PlanCheckBase):
         self.min_rows = min_rows
 
     def gather_info(self, node: dict[str, Any]) -> dict[str, Any] | None:
-        """Return ``{planned, actual, ratio, node_type, relation}``.
-
-        ``None`` if either side is zero or negative.
-        """
         planned = node.get("Plan Rows", 0)
         actual = node.get("Actual Rows", 0)
         if planned <= 0 or actual <= 0:
@@ -200,9 +209,7 @@ class EstimateMismatchCheck(PlanCheckBase):
             return False
         if info["actual"] < self.min_rows:
             return False
-        if info["ratio"] <= self.threshold_ratio:
-            return False
-        return True
+        return info["ratio"] > self.threshold_ratio
 
     def generate_msg(self, info: dict[str, Any]) -> list[Issue]:
         where = f" on '{info['relation']}'" if info["relation"] else ""

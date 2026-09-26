@@ -5,15 +5,22 @@ create table if not exists databases (
     database    text    primary key
 );
 
+create table if not exists check_classes (
+    name text primary key
+);
+
 create table if not exists checks (
     num         integer not null,
     database    text    not null,
     name        text    not null,   -- matches the Python class name
+    check_class text    not null,
     description text    not null,
     enabled     integer not null default 1,
     primary key (num, database),
     foreign key (database) references databases (database)
-        on delete cascade
+        on delete cascade,
+    foreign key (check_class) references check_classes(name)
+        on delete restrict
 );
 
 create unique index if not exists checks_name_db
