@@ -228,22 +228,5 @@ The hash table exceeded `work_mem` and was written to disk in batches.
    32 / 64 / 128 / 256 / 512 / 1024 MB
    ```
 
-   Do **not** recommend an intermediate value like `74 MB`. The goal
-   is a value that is easy to reason about, easy to set in
-   `postgresql.conf`, and easy to compare across services. If the
-   computed minimum is 73.3 MB, the recommendation is **128 MB**,
-   not 74 MB.
-5. Present the recommendation as a **before/after pair**, citing both
-   the current and the recommended values. Example of an acceptable
-   answer:
-
-   > Current `work_mem` is 20 MB, `hash_mem_multiplier` is 2.
-   > Effective hash budget: 40 MB. Estimated hash size: 146.6 MB.
-   > Minimum required: `146.6 / 2 = 73.3 MB`. I recommend
-   > `SET work_mem = '128MB'` (20 MB → 128 MB).
-
-   An answer that picks 256 MB without citing the current value is
-   **wrong**, even if the value itself is safe. An answer that
-   subtracts the current `work_mem` from the estimated size is also
-   **wrong** — the formula divides, it does not subtract.
+5. Present the recommendation as a **before/after pair**.
 

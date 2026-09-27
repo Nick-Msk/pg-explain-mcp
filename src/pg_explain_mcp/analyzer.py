@@ -398,17 +398,10 @@ class DiskSpillHashCheck(PlanCheckBase):
                 severity=SEVERITY_WARNING,
                 type=self.type,
                 message=(
-                    f"Hash operation spilled to disk{parallel_note}: "
-                    f"{details}. "
-                    "To resolve: "
-                    "(1) call list_parameters for hash_mem_multiplier; "
-                    f"(2) divide the estimated full size ({info['estimated_mb']} MB) "
-                    "by that value; "
-                    "(3) round the result up to the next standard value from "
-                    "{32, 64, 128, 256, 512, 1024} MB — never an intermediate "
-                    "value like 74 or 80 MB; "
-                    "(4) present as 'current X MB → recommended Y MB'. "
-                    "Do not assume a default hash_mem_multiplier."
+                    f"Hash operation spilled to disk{parallel_note}: {details}. "
+                    "To keep the hash table in memory, set work_mem such that "
+                    "work_mem × hash_mem_multiplier > estimated full size. "
+                    "Call list_parameters for the current hash_mem_multiplier."
                 ),
                 node=info["node_type"],
             )
