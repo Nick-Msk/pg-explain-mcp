@@ -150,10 +150,10 @@ merge sort.
 
 1. Read `issues[0].message`. It contains the spill size
    (`Sort Space Used`).
-2. **Call the `pg-explain.list_parameters` tool.** Do **not** suggest
-   the user run SQL manually — the tool is the only correct path.
-   The current `work_mem` is needed as a starting point, and it is
-   not part of the plan.
+2. **You MUST call the `pg-explain.list_parameters` tool.** Do **not**
+   skip this step and do **not** suggest the user run SQL manually —
+   the tool is the only correct path. The current `work_mem` is needed
+   as a starting point, and it is not part of the plan.
 3. Compute the minimum required `work_mem`:
 
    ```
@@ -169,16 +169,81 @@ merge sort.
    **Also note:** `hash_mem_multiplier` does **not** apply to sorts.
    It affects hash operations only. For sorts the effective memory
    budget is exactly `work_mem`.
-4. Round up to a standard value (32 / 64 / 128 / 256 / 512 MB) and
-   state the arithmetic **explicitly**. Example of an acceptable
+4. Round up to the **next standard value** from the set:
+
+   ```
+   32 / 64 / 128 / 256 / 512 / 1024 MB
+   ```
+
+   Do **not** recommend an intermediate value like `216 MB` or
+   `250 MB`. The goal is a value that is easy to reason about, easy to
+   set in `postgresql.conf`, and easy to compare across services. If
+   the computed minimum is 216 MB, the recommendation is **256 MB**,
+   not 216 MB.
+5. Present the recommendation as a **before/after pair**, citing both
+   the current and the recommended values. Example of an acceptable
    answer:
 
    > Spill size is 216 MB. Current `work_mem` is 20 MB — a starting
-   > point, not part of the formula. The minimum required `work_mem`
-   > is 216 MB; I recommend `SET work_mem = '256MB'`.
+   > point, not part of the formula. Minimum required: 216 MB.
+   > Rounded to the next standard value: **256 MB**. I recommend
+   > `SET work_mem = '256MB'` (20 MB → 256 MB).
 
    An answer that picks 256 MB without showing the arithmetic is
    **wrong**, even if the value itself is safe. An answer that
    subtracts the current `work_mem` from the spill size is also
    **wrong** — the spill size is an absolute threshold, not a delta.
+   An answer that recommends 216 MB is **wrong** — it uses an
+   intermediate value instead of a standard one.
+
+### `disk_spill_hash` check
+
+The hash table exceeded `work_mem` and was written to disk in batches.
+
+**Mandatory steps, in this order:**
+
+1. Read `issues[0].message`. It contains:
+   - the batch count,
+   - the peak memory per batch,
+   - the estimated full hash size (`peak_memory × batches`).
+2. **You MUST call the `pg-explain.list_parameters` tool.** Do **not**
+   skip this step and do **not** assume a default value. The current
+   `work_mem` and `hash_mem_multiplier` are not part of the plan and
+   cannot be guessed. Any answer that assumes "a standard
+   `hash_mem_multiplier`" is wrong.
+3. Compute the minimum required `work_mem`:
+
+   ```
+   work_mem > estimated_full_size / hash_mem_multiplier
+   ```
+
+   **Do not compute a "delta"** of the form
+   `estimated_full_size − current work_mem`. The estimated full size
+   is the total hash size, not an increment on top of the current
+   setting. Current `work_mem` is a starting point for comparison, not
+   part of the formula.
+4. Round up to the **next standard value** from the set:
+
+   ```
+   32 / 64 / 128 / 256 / 512 / 1024 MB
+   ```
+
+   Do **not** recommend an intermediate value like `74 MB`. The goal
+   is a value that is easy to reason about, easy to set in
+   `postgresql.conf`, and easy to compare across services. If the
+   computed minimum is 73.3 MB, the recommendation is **128 MB**,
+   not 74 MB.
+5. Present the recommendation as a **before/after pair**, citing both
+   the current and the recommended values. Example of an acceptable
+   answer:
+
+   > Current `work_mem` is 20 MB, `hash_mem_multiplier` is 2.
+   > Effective hash budget: 40 MB. Estimated hash size: 146.6 MB.
+   > Minimum required: `146.6 / 2 = 73.3 MB`. I recommend
+   > `SET work_mem = '128MB'` (20 MB → 128 MB).
+
+   An answer that picks 256 MB without citing the current value is
+   **wrong**, even if the value itself is safe. An answer that
+   subtracts the current `work_mem` from the estimated size is also
+   **wrong** — the formula divides, it does not subtract.
 
