@@ -252,62 +252,7 @@ class EstimateMismatchCheck(PlanCheckBase):
             )
         ]
 
-class DiskSpillSortCheck:
-    """Sort operation spilled to disk — work_mem is too small.
-
-    The check produces a self-contained recommendation: it rounds the
-    spill size up to the next power-of-two MB value and states it
-    directly, so the caller does not have to subtract, divide, or look
-    up runtime parameters.
-    """
-
-    name = "DiskSpillSortCheck"
-    type = "disk_spill_sort"
-
-    def __init__(self, min_spill_kb: int = 0) -> None:
-        self.min_spill_kb = min_spill_kb
-
-    def check(self, node: dict[str, Any]) -> list[Issue]:
-        method = node.get("Sort Method", "")
-        if not method.startswith("external"):
-            return []
-
-        used = node.get("Sort Space Used", 0)
-        space_type = node.get("Sort Space Type", "")
-
-        if not (used and space_type == "Disk"):
-            return [
-                Issue(
-                    severity=SEVERITY_WARNING,
-                    type=self.type,
-                    message="Sort spilled to disk. Increase work_mem.",
-                    node="Sort",
-                )
-            ]
-
-        size_mb = used / 1024
-        # round up to the next power of two: 32/64/128/256/512/1024 MB
-        target = 32
-        while target < size_mb * 1.1:
-            target *= 2
-
-        return [
-            Issue(
-                severity=SEVERITY_WARNING,
-                type=self.type,
-                message=(
-                    f"Sort spilled to disk ({used}kB ≈ {size_mb:.1f} MB). "
-                    f"Recommended fix: set work_mem to at least {size_mb:.0f} MB; "
-                    f"a safe round value is {target} MB. "
-                    "Note: sorts use work_mem directly — hash_mem_multiplier "
-                    "does not apply. Current work_mem is not part of this "
-                    "calculation."
-                ),
-                node="Sort",
-            )
-        ]
-
-class DiskSpillSortSizedCheck(PlanCheckBase):
+class DiskSpillSortCheck(PlanCheckBase):
     """Sort spilled to disk, size known.
 
     Fires when ``Sort Method`` starts with ``external`` and the plan
@@ -327,7 +272,7 @@ class DiskSpillSortSizedCheck(PlanCheckBase):
     ``work_mem`` counts.
     """
 
-    name = "DiskSpillSortSizedCheck"
+    name = "DiskSpillSortCheck"
     type = "disk_spill_sort"
 
     def __init__(self, min_spill_kb: int = 0) -> None:
@@ -371,56 +316,6 @@ class DiskSpillSortSizedCheck(PlanCheckBase):
                     "Note: sorts use work_mem directly — "
                     "hash_mem_multiplier does not apply. "
                     "Current work_mem is not part of this calculation."
-                ),
-                node="Sort",
-            )
-        ]
-
-class DiskSpillSortUnsizedCheck(PlanCheckBase):
-    """Sort spilled to disk, size unknown.
-
-    Falls back to a generic recommendation when the plan reports an
-    external sort but does not include the size fields. In
-    PostgreSQL 14+ external sorts always report ``Sort Space Type``
-    and ``Sort Space Used``, so this branch is defensive: it exists
-    to produce a useful message if a malformed or future plan ever
-    reaches the analyzer without those fields.
-
-    ``gather_info`` returns:
-
-        {
-            "method": str,   # e.g. "external merge"
-        }
-    """
-
-    name = "DiskSpillSortUnsizedCheck"
-    type = "disk_spill_sort"
-
-    def gather_info(self, node: dict[str, Any]) -> dict[str, Any] | None:
-        method = node.get("Sort Method", "")
-        if not method.startswith("external"):
-            return None
-        used = node.get("Sort Space Used", 0)
-        space_type = node.get("Sort Space Type", "")
-        if used and space_type == "Disk":
-            return None   # sized branch handles this case
-        return {"method": method}
-
-    def validate_rule(self, info: dict[str, Any]) -> bool:
-        return True
-
-    def generate_msg(self, info: dict[str, Any]) -> list[Issue]:
-        return [
-            Issue(
-                severity=SEVERITY_WARNING,
-                type=self.type,
-                message=(
-                    f"Sort spilled to disk (method: '{info['method']}'), "
-                    "but the plan does not report a size. Increase "
-                    "work_mem manually — inspect the spill size with "
-                    "EXPLAIN (ANALYZE, BUFFERS) in psql. Note: "
-                    "hash_mem_multiplier does NOT apply to sorts; only "
-                    "work_mem counts."
                 ),
                 node="Sort",
             )
