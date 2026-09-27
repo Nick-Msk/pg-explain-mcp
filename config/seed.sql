@@ -6,22 +6,40 @@
 insert into databases (database) values
     ('postgres');
 
-insert into check_classes (name) values
+insert into tags (name) values
     ('GENERAL'),
+    ('SPILL'),
     ('INDEX'),
-    ('SORT');
+    ('SORT'),
+    ('HASH');
 
-insert into checks (num, database, name, check_class, description, enabled) values
-    (1,  'postgres', 'SeqScanCheck',                'GENERAL', 'sequential scan that discards most rows',               1),
-    (2,  'postgres', 'EstimateMismatchCheck',       'GENERAL', 'planner cardinality misestimate',                       1),
-    (3,  'postgres', 'DiskSpillSortCheck',          'SORT',    'sort spilling to disk — size known',                    1),
-    (4,  'postgres', 'DiskSpillHashCheck',          'GENERAL', 'hash operation using multiple batches',                 1),
-    (5,  'postgres', 'NestedLoopCheck',             'GENERAL', 'Nested Loop with many inner iterations',                1),
-    (6,  'postgres', 'BitmapHeapScanCheck',         'GENERAL', 'large Bitmap Heap Scan',                                1),
-    (7,  'postgres', 'IndexRegularScanCheck',       'INDEX',   'index scan reading too many blocks for rows returned',  0),
-    (8,  'postgres', 'IndexOnlyScanCheck',          'INDEX',   'index only scan with stale visibility map',             0),
-    (9,  'postgres', 'PartitionPruningCheck',       'GENERAL', 'Append over many partitions — pruning may have failed', 1),
-    (10, 'postgres', 'NonSargableCheck',            'GENERAL', 'non-sargable predicate on an indexed column',           1);
+insert into checks (num, database, name, description, enabled) values
+    (1,  'postgres', 'SeqScanCheck',          'sequential scan that discards most rows',                1),
+    (2,  'postgres', 'EstimateMismatchCheck', 'planner cardinality misestimate',                        1),
+    (3,  'postgres', 'DiskSpillSortCheck',    'sort spilling to disk',                                  1),
+    (4,  'postgres', 'DiskSpillHashCheck',    'hash operation using multiple batches',                  1),
+    (5,  'postgres', 'NestedLoopCheck',       'Nested Loop with many inner iterations',                 1),
+    (6,  'postgres', 'BitmapHeapScanCheck',   'large Bitmap Heap Scan',                                 1),
+    (7,  'postgres', 'IndexRegularScanCheck', 'index scan reading too many blocks for rows returned',   0),
+    (8,  'postgres', 'IndexOnlyScanCheck',    'index only scan with stale visibility map',              0),
+    (9,  'postgres', 'PartitionPruningCheck', 'Append over many partitions — pruning may have failed',  1),
+    (10, 'postgres', 'NonSargableCheck',      'non-sargable predicate on an indexed column',            1);
+
+insert into checks_tags (num, database, tag) values
+    (1,  'postgres', 'GENERAL'),
+    (2,  'postgres', 'GENERAL'),
+    (3,  'postgres', 'SPILL'),
+    (3,  'postgres', 'SORT'),
+    (4,  'postgres', 'SPILL'),
+    (4,  'postgres', 'HASH'),
+    (5,  'postgres', 'GENERAL'),
+    (6,  'postgres', 'GENERAL'),
+    (7,  'postgres', 'GENERAL'),
+    (7,  'postgres', 'INDEX'),
+    (8,  'postgres', 'GENERAL'),
+    (8,  'postgres', 'INDEX'),
+    (9,  'postgres', 'GENERAL'),
+    (10, 'postgres', 'GENERAL');
 
 insert into check_params (num, database, param, value, default_value) values
     (1, 'postgres', 'threshold_rows',    '1000',   '1000'),

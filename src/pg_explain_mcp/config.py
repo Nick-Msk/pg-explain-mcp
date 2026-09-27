@@ -222,10 +222,11 @@ def reset_param(
 _REQUIRED_COLUMNS: dict[str, set[str]] = {
     "databases":    {"database"},
     "checks":       {"num", "database", "name", "description", "enabled"},
+    "tags":         {"name"},
+    "checks_tags":  {"num", "database", "tag"},
     "check_params": {"num", "database", "param", "value", "default_value"},
     "plan_fields":  {"database", "raw", "key", "enabled"},
 }
-
 
 def _ensure_db(db_path: Path) -> None:
     """Ensure the config DB exists *and* matches the expected schema.
@@ -419,26 +420,36 @@ if __name__ == "__main__":
     elif args.show:
         with sqlite3.connect(DEFAULT_DB) as conn:
             conn.row_factory = sqlite3.Row
+
             print("databases:")
-            for r in conn.execute("select database from databases order by database"):
+            for r in conn.execute(
+                "select database from databases order by database"
+            ):
                 print(f"  {r['database']}")
+
             print("checks:")
             for r in conn.execute(
-                "select num, database, name, check_class, enabled from checks "
+                "select num, database, name, enabled, tags "
+                "from checks_with_tags "
                 "order by database, num"
             ):
                 mark = "on " if r["enabled"] else "off"
+                tags = f" [{r['tags']}]" if r["tags"] else ""
                 print(
-                    f"  {r['database']}  {r['num']:>2}  [{mark}]"
-                    f"  {r['check_class']:<8} {r['name']}"
+                    f"  {r['database']}  {r['num']:>2}  [{mark}]  "
+                    f"{r['name']}{tags}"
                 )
+
             print("plan fields:")
             for r in conn.execute(
                 "select database, raw, key, enabled from plan_fields "
-                "order by database, raw"
+            "order by database, raw"
             ):
                 mark = "on " if r["enabled"] else "off"
-                print(f"  {r['database']}  [{mark}]  {r['raw']!r} → {r['key']!r}")
+                print(
+                    f"  {r['database']}  [{mark}]  "
+                    f"{r['raw']!r} → {r['key']!r}"
+                )
     else:
         parser.print_help()
 
