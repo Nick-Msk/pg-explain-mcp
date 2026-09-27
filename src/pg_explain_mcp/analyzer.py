@@ -321,7 +321,7 @@ class DiskSpillSortCheck(PlanCheckBase):
             )
         ]
 
-class DiskSpillHashCheck:
+class DiskSpillHashCheck(PlanCheckBase):
     """Hash operation spilled to disk — work_mem is too small.
 
     When the hash table no longer fits in ``work_mem``, PostgreSQL
@@ -336,10 +336,21 @@ class DiskSpillHashCheck:
     - ``Disk Usage`` — actual bytes written to temporary files, when
       PostgreSQL reports them.
 
-    The recommendation formula is intentionally spelled out in the
-    message: PostgreSQL allocates ``work_mem × hash_mem_multiplier``
-    to hash operations, and the multiplier is not visible in the plan.
-    The caller is expected to look it up via ``list_parameters``.
+    ``gather_info`` returns:
+
+        {
+            "batches":       int,
+            "peak_kb":       int,    # 0 if absent
+            "estimated_mb":  float,  # 0.0 if peak absent
+            "disk_kb":       int,    # 0 if absent
+            "parallel":      bool,
+            "loops":         int,
+            "node_type":     str,
+        }
+
+    The effective hash budget is ``work_mem × hash_mem_multiplier`` —
+    the multiplier is not part of the plan, so the message points at
+    ``list_parameters`` for the caller to look it up.
     """
 
     name = "DiskSpillHashCheck"
@@ -348,38 +359,53 @@ class DiskSpillHashCheck:
     def __init__(self, min_batches: int = 2) -> None:
         self.min_batches = min_batches
 
-    def check(self, node: dict[str, Any]) -> list[Issue]:
+    def gather_info(self, node: dict[str, Any]) -> dict[str, Any] | None:
         batches = node.get("Hash Batches", 1)
-        if batches <= 1:
-            return []
+        if batches <= 0:
+            return None
 
-        memory = node.get("Peak Memory Usage", 0)
-        disk = node.get("Disk Usage", 0)
-        parallel = node.get("Parallel Aware", False)
-        loops = node.get("Actual Loops", 1)
+        peak_kb = node.get("Peak Memory Usage", 0)
+        return {
+            "batches": batches,
+            "peak_kb": peak_kb,
+            "estimated_mb": round(peak_kb * batches / 1024, 1) if peak_kb else 0.0,
+            "disk_kb": node.get("Disk Usage", 0),
+            "parallel": node.get("Parallel Aware", False),
+            "loops": node.get("Actual Loops", 1),
+            "node_type": node.get("Node Type", "Hash"),
+        }
 
-        parts = [f"{batches} batches"]
-        if memory:
-            estimated_mb = round(memory * batches / 1024, 1)
-            parts.append(f"peak {memory}kB per batch")
-            parts.append(f"estimated full size ≈ {estimated_mb} MB")
-        if disk:
-            parts.append(f"disk {disk}kB")
+    def validate_rule(self, info: dict[str, Any]) -> bool:
+        return info["batches"] >= self.min_batches
+
+    def generate_msg(self, info: dict[str, Any]) -> list[Issue]:
+        parts = [f"{info['batches']} batches"]
+        if info["peak_kb"]:
+            parts.append(f"peak {info['peak_kb']}kB per batch")
+            parts.append(f"estimated full size ≈ {info['estimated_mb']} MB")
+        if info["disk_kb"]:
+            parts.append(f"disk {info['disk_kb']}kB")
 
         details = ", ".join(parts)
-        parallel_note = f" (per worker, {loops} workers)" if parallel and loops > 1 else ""
+        parallel_note = (
+            f" (per worker, {info['loops']} workers)"
+            if info["parallel"] and info["loops"] > 1
+            else ""
+        )
 
         return [
             Issue(
                 severity=SEVERITY_WARNING,
                 type=self.type,
                 message=(
-                    f"Hash operation spilled to disk{parallel_note}: {details}. "
-                    "To keep the hash table in memory, set work_mem such that "
-                    "work_mem × hash_mem_multiplier > estimated full size. "
-                    "Call list_parameters for the current hash_mem_multiplier."
+                    f"Hash operation spilled to disk{parallel_note}: "
+                    f"{details}. "
+                    "To keep the hash table in memory, set work_mem such "
+                    "that work_mem × hash_mem_multiplier > estimated full "
+                    "size. Call list_parameters for the current "
+                    "hash_mem_multiplier."
                 ),
-                node=node.get("Node Type", "Hash"),
+                node=info["node_type"],
             )
         ]
 

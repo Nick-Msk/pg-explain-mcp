@@ -279,6 +279,39 @@ class TestDiskSpillHashCheck:
         assert len(issues) == 1
         assert "4 batches" in issues[0].message
 
+    def test_gather_info_returns_none_when_batches_invalid(self):
+        check = DiskSpillHashCheck()
+        assert check.gather_info({"Hash Batches": 0}) is None
+
+    def test_gather_info_returns_info_for_default(self):
+        """Missing 'Hash Batches' falls back to 1 — hash not spilled."""
+        check = DiskSpillHashCheck()
+        info = check.gather_info({"Node Type": "Hash"})
+        assert info["batches"] == 1
+
+    def test_gather_info_computes_estimated_mb(self):
+        check = DiskSpillHashCheck()
+        info = check.gather_info({
+            "Node Type": "Hash",
+            "Hash Batches": 4,
+            "Peak Memory Usage": 37536,
+        })
+        assert info["batches"] == 4
+        assert info["peak_kb"] == 37536
+        assert info["estimated_mb"] == 146.6
+
+    def test_gather_info_without_peak(self):
+        """A malformed plan without Peak Memory Usage still parses."""
+        check = DiskSpillHashCheck()
+        info = check.gather_info({"Hash Batches": 4})
+        assert info["peak_kb"] == 0
+        assert info["estimated_mb"] == 0.0
+
+    def test_validate_rule_threshold(self):
+        check = DiskSpillHashCheck(min_batches=4)
+        assert check.validate_rule({"batches": 4}) is True
+        assert check.validate_rule({"batches": 3}) is False
+
 class TestNestedLoopCheck:
     def test_few_loops_is_ok(self):
         node = {
