@@ -585,6 +585,73 @@ class TestPartitionPruningCheck:
         # preview is empty, but the message must still be well-formed
         assert "Scanned: " in issues[0].message
 
+    # ----- phase tests ------------------------------------------------------
+
+    def test_gather_info_returns_none_for_wrong_node(self):
+        check = PartitionPruningCheck()
+        assert check.gather_info({"Node Type": "Seq Scan"}) is None
+
+    def test_gather_info_returns_none_for_other_join(self):
+        check = PartitionPruningCheck()
+        assert check.gather_info({"Node Type": "Hash Join"}) is None
+
+    def test_gather_info_for_empty_append(self):
+        check = PartitionPruningCheck()
+        info = check.gather_info({"Node Type": "Append", "Plans": []})
+        assert info == {"count": 0, "names": []}
+
+    def test_gather_info_collects_relation_names(self):
+        check = PartitionPruningCheck()
+        node = {
+            "Node Type": "Merge Append",
+            "Plans": [
+                {"Node Type": "Seq Scan", "Relation Name": "t_p01"},
+                {"Node Type": "Seq Scan", "Relation Name": "t_p02"},
+            {"Node Type": "Seq Scan"},   # no name — skipped
+            ],
+        }
+        info = check.gather_info(node)
+        assert info["count"] == 3
+        assert info["names"] == ["t_p01", "t_p02"]
+
+    def test_validate_rule_threshold(self):
+        check = PartitionPruningCheck(max_children=3)
+        assert check.validate_rule({"count": 4, "names": []}) is True
+        assert check.validate_rule({"count": 3, "names": []}) is False
+        assert check.validate_rule({"count": 1, "names": []}) is False
+
+    def test_generate_msg_short_list(self):
+        check = PartitionPruningCheck(max_children=3)
+        info = {"count": 5, "names": ["a", "b", "c"]}
+        issues = check.generate_msg(info)
+        msg = issues[0].message
+        assert "Append over 5 partitions" in msg
+        assert "Scanned: a, b, c" in msg
+        assert "more)" not in msg
+
+    def test_generate_msg_long_list_is_truncated(self):
+        check = PartitionPruningCheck(max_children=3)
+        info = {
+            "count": 12,
+            "names": [f"t_p{i:02d}" for i in range(1, 13)],
+        }
+        issues = check.generate_msg(info)
+        msg = issues[0].message
+        assert "Append over 12 partitions" in msg
+        assert "t_p01, t_p02, t_p03" in msg
+        assert "… (+9 more)" in msg
+        assert "t_p04" not in msg   # beyond preview
+
+    def test_generate_msg_empty_names(self):
+        """Children without relation names still produce a valid message."""
+        check = PartitionPruningCheck(max_children=3)
+        info = {"count": 5, "names": []}
+        issues = check.generate_msg(info)
+        msg = issues[0].message
+        assert "Append over 5 partitions" in msg
+        assert "Scanned: " in msg
+        # no crash, no dangling comma
+
 class TestNonSargableCheck:
     """Tests for NonSargableCheck.
 

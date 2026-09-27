@@ -622,7 +622,7 @@ class IndexScanCheck:
             )
         ]
 
-class PartitionPruningCheck:
+class PartitionPruningCheck(PlanCheckBase):
     """Append / Merge Append over many partitions — pruning may have failed.
 
     On a partitioned table the planner prunes partitions that cannot
@@ -637,6 +637,15 @@ class PartitionPruningCheck:
     attribute rows to specific partitions, so per-partition estimates
     default to a uniform split. ``ANALYZE`` will not fix that; only
     rewriting the predicate will.
+
+    ``gather_info`` returns:
+
+        {
+            "count":    int,
+            "names":    list[str],   # partition relation names, may be empty
+        }
+
+    Fires at ``WARNING`` level.
     """
 
     name = "PartitionPruningCheck"
@@ -645,20 +654,25 @@ class PartitionPruningCheck:
     def __init__(self, max_children: int = 3) -> None:
         self.max_children = max_children
 
-    def check(self, node: dict[str, Any]) -> list[Issue]:
+    def gather_info(self, node: dict[str, Any]) -> dict[str, Any] | None:
         if node.get("Node Type") not in ("Append", "Merge Append"):
-            return []
+            return None
 
         children = node.get("Plans", [])
-        count = len(children)
-        if count <= self.max_children:
-            return []
+        return {
+            "count": len(children),
+            "names": [
+                c.get("Relation Name")
+                for c in children
+                if c.get("Relation Name")
+            ],
+        }
 
-        names = [
-            c.get("Relation Name")
-            for c in children
-            if c.get("Relation Name")
-        ]
+    def validate_rule(self, info: dict[str, Any]) -> bool:
+        return info["count"] > self.max_children
+
+    def generate_msg(self, info: dict[str, Any]) -> list[Issue]:
+        names = info["names"]
         preview = ", ".join(names[:3])
         if len(names) > 3:
             preview += f", … (+{len(names) - 3} more)"
@@ -668,7 +682,7 @@ class PartitionPruningCheck:
                 severity=SEVERITY_WARNING,
                 type=self.type,
                 message=(
-                    f"Append over {count} partitions "
+                    f"Append over {info['count']} partitions "
                     f"(threshold: {self.max_children}). "
                     "Partition pruning may have failed — check that the "
                     "predicate on the partition key is sargable: no "
@@ -680,7 +694,7 @@ class PartitionPruningCheck:
                     "not help — rewrite the predicate. "
                     "Scanned: " + preview
                 ),
-                node=node.get("Node Type"),
+                node="Append",
             )
         ]
 
