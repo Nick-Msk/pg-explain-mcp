@@ -698,7 +698,8 @@ class PartitionPruningCheck(PlanCheckBase):
             )
         ]
 
-class NonSargableCheck:
+
+class NonSargableCheck(PlanCheckBase):
     """Non-sargable predicate on a column that has a plain index.
 
     A predicate like ``lower(email) = 'x'`` wraps the column in a
@@ -708,15 +709,26 @@ class NonSargableCheck:
     this query.
 
     The check does not use a whitelist of function names — that would
-    miss user-defined functions and any builtin we forgot. Instead it
-    looks for the pattern ``<word>(<column>`` in the ``Filter``
-    string, using the list of columns covered by plain (non-functional)
-    indexes on the relation.
+    miss user-defined functions. Instead it looks for the pattern
+    ``<word>(...<column>...)`` inside the ``Filter`` string, using the
+    list of columns covered by plain indexes on the relation.
 
-    Functional indexes themselves are not our concern: if a functional
-    index exists on the exact expression, the planner uses it, and the
-    predicate appears in ``Index Cond`` rather than ``Filter``. Such
-    cases are ignored.
+    ``relation_indexes`` is supplied by the caller (``server.py``)
+    because the check must not query the database itself. Each entry
+    is ``{leading_attnum: int, plain_columns: list[str]}``.
+
+    ``gather_info`` returns:
+
+        {
+            "relation":   str,
+            "column":     str,   # wrapped in a function
+            "func":       str,   # the wrapping function name
+            "filter":     str,   # full Filter string
+            "rows_read":  float, # actual + removed
+        }
+
+    Fires at ``INFO`` level — the predicate is functionally correct,
+    just not index-friendly.
     """
 
     name = "NonSargableCheck"
@@ -726,61 +738,68 @@ class NonSargableCheck:
         self,
         threshold_rows: int = 1000,
         relation_indexes: dict[str, list[dict[str, Any]]] | None = None,
+        **_ignored: Any,
     ) -> None:
         self.threshold_rows = threshold_rows
         self.relation_indexes = relation_indexes or {}
 
-    def check(self, node: dict[str, Any]) -> list[Issue]:
+    def gather_info(self, node: dict[str, Any]) -> dict[str, Any] | None:
         filter_str = node.get("Filter", "")
         if not filter_str:
-            return []
-
-        actual = node.get("Actual Rows", 0)
-        removed = node.get("Rows Removed by Filter", 0)
-        if actual + removed < self.threshold_rows:
-            return []
+            return None
 
         relation = node.get("Relation Name", "?")
         indexed_columns = self._plain_indexed_columns(relation)
         if not indexed_columns:
-            return []
+            return None
 
         for column in indexed_columns:
             func = self._wrapped_in_function(filter_str, column)
             if func is None:
                 continue
+            return {
+                "relation": relation,
+                "column": column,
+                "func": func,
+                "filter": filter_str,
+                "rows_read": (
+                    node.get("Actual Rows", 0)
+                    + node.get("Rows Removed by Filter", 0)
+                ),
+            }
 
-            return [
-                Issue(
-                    severity=SEVERITY_INFO,
-                    type=self.type,
-                    message=(
-                        f"Non-sargable predicate on '{relation}': the "
-                        f"filter wraps '{column}' in '{func}(...)', so "
-                        f"the index on '{column}' cannot be used. "
-                        f"Consider a functional index on the exact "
-                        f"expression, or rewriting the predicate. "
-                        f"Filter: {filter_str}"
-                    ),
-                    node=node.get("Node Type"),
-                )
-            ]
+        return None
 
-        return []
+    def validate_rule(self, info: dict[str, Any]) -> bool:
+        return info["rows_read"] >= self.threshold_rows
+
+    def generate_msg(self, info: dict[str, Any]) -> list[Issue]:
+        return [
+            Issue(
+                severity=SEVERITY_INFO,
+                type=self.type,
+                message=(
+                    f"Non-sargable predicate on '{info['relation']}': "
+                    f"the filter wraps '{info['column']}' in "
+                    f"'{info['func']}(...)', so the index on "
+                    f"'{info['column']}' cannot be used. Consider a "
+                    "functional index on the exact expression, or "
+                    "rewriting the predicate. "
+                    f"Filter: {info['filter']}"
+                ),
+                node="Seq Scan",
+            )
+        ]
+
+    # ----- helpers -------------------------------------------------------
 
     def _plain_indexed_columns(self, relation: str) -> set[str]:
-        """Return columns that a plain ``col = value`` predicate can use.
+        """Columns that a plain ``col = value`` predicate can use.
 
-        A column qualifies only if it is the **leading** column of an
-        index and that slot is a plain column, not an expression. Two
-        cases are excluded:
-
-        - functional indexes (``lower(email)``) — planner would not put
-          the predicate in ``Filter`` if such an index existed for the
-          expression, so those never reach this check in practice;
-        - non-leading columns of composite indexes (``email`` in
-          ``(status, email)``) — a rewrite to ``email = value`` would not
-          use the index.
+        Only the leading slot of an index qualifies, and only if that
+        slot is a real column (not an expression). Non-leading columns
+        of composite indexes are excluded — a rewrite to ``col = value``
+        would not use such an index.
         """
         indexes = self.relation_indexes.get(relation, [])
         columns: set[str] = set()
@@ -792,7 +811,6 @@ class NonSargableCheck:
             if not plain:
                 continue
             columns.add(plain[0])
-
         return columns
 
     def _wrapped_in_function(
@@ -800,33 +818,16 @@ class NonSargableCheck:
     ) -> str | None:
         """Return a function name if ``column`` appears inside its parens.
 
-        Scans every ``word(`` occurrence in the filter and, for each one,
-        inspects the contents up to the matching ``)``. If the column
-        appears as a whole word anywhere inside, the predicate is
-        non-sargable on that column.
-
-        This catches:
-
-        - ``lower(email)`` — column is the first argument;
-        - ``date_trunc('month', ts)`` — column is not the first argument;
-        - ``extract(month from ts)`` — special FROM syntax;
-        - ``lower(users.email)`` — table-qualified name;
-        - ``lower(coalesce(email, ''))`` — nested calls, since the inner
-          ``coalesce`` will also be visited.
-
-        It does not flag:
-
-        - ``email = 'x'`` — no function wrapping;
-        - ``email IS NOT NULL`` — no ``word(`` pattern;
-        - ``email = ANY(ARRAY[...])`` — ``array`` is on the right-hand
-          side; the column does not appear inside ``any(...)``.
+        Scans every ``word(`` occurrence in the filter and, for each
+        one, inspects the contents up to the matching ``)``. If the
+        column appears as a whole word anywhere inside, the predicate
+        is non-sargable on that column.
         """
         for m in re.finditer(r"\b(\w+)\s*\(", filter_str, re.IGNORECASE):
             func = m.group(1)
             if func.lower() in ("array", "row", "values"):
                 continue
 
-            # Scan forward to the matching close paren.
             start = m.end()
             depth = 1
             i = start
@@ -837,8 +838,11 @@ class NonSargableCheck:
                     depth -= 1
                 i += 1
 
-            inner = filter_str[start:i - 1] if depth == 0 else filter_str[start:]
-
+            inner = (
+                filter_str[start : i - 1]
+                if depth == 0
+                else filter_str[start:]
+            )
             if re.search(rf"\b{re.escape(column)}\b", inner, re.IGNORECASE):
                 return func
 

@@ -961,6 +961,101 @@ class TestNonSargableCheck:
         # total_read = 110 < threshold 5000 → silent
         assert check.check(node) == []
 
+        # ----- phase tests ------------------------------------------------------
+
+        def _indexes(self, relation: str, *specs: dict) -> dict:
+            return {relation: list(specs)}
+
+        def test_gather_info_returns_none_without_filter(self):
+            check = NonSargableCheck(
+                relation_indexes=self._indexes(
+                    "users",
+                    {"leading_attnum": 2, "plain_columns": ["email"]},
+                ),
+            )
+            assert check.gather_info({
+                "Node Type": "Seq Scan",
+                "Relation Name": "users",
+                "Actual Rows": 100,
+            }) is None
+
+        def test_gather_info_returns_none_when_no_indexes(self):
+            check = NonSargableCheck(relation_indexes={})
+            node = {
+                "Node Type": "Seq Scan",
+                "Relation Name": "users",
+                "Actual Rows": 100,
+                "Rows Removed by Filter": 9900,
+                "Filter": "(lower(email) = 'x'::text)",
+            }
+            assert check.gather_info(node) is None
+
+        def test_gather_info_returns_none_for_sargable_filter(self):
+            check = NonSargableCheck(
+                relation_indexes=self._indexes(
+                    "users",
+                    {"leading_attnum": 2, "plain_columns": ["email"]},
+                ),
+            )
+            node = {
+                "Node Type": "Seq Scan",
+                "Relation Name": "users",
+                "Actual Rows": 100,
+                "Rows Removed by Filter": 9900,
+                "Filter": "(email = 'x'::text)",
+            }
+            assert check.gather_info(node) is None
+
+        def test_gather_info_returns_details_on_hit(self):
+            check = NonSargableCheck(
+                relation_indexes=self._indexes(
+                    "users",
+                    {"leading_attnum": 2, "plain_columns": ["email"]},
+                ),
+            )
+            node = {
+                "Node Type": "Seq Scan",
+                "Relation Name": "users",
+                "Actual Rows": 100,
+                "Rows Removed by Filter": 9900,
+                "Filter": "(lower(email) = 'x'::text)",
+            }
+            info = check.gather_info(node)
+            assert info["column"] == "email"
+            assert info["func"] == "lower"
+            assert info["relation"] == "users"
+            assert info["rows_read"] == 10000
+            assert "lower(email)" in info["filter"]
+
+        def test_validate_rule_threshold(self):
+            check = NonSargableCheck(
+                threshold_rows=1000,
+                relation_indexes=self._indexes(
+                    "users",
+                    {"leading_attnum": 2, "plain_columns": ["email"]},
+                ),
+            )
+            assert check.validate_rule({"rows_read": 1000}) is True
+            assert check.validate_rule({"rows_read": 999}) is False
+
+        def test_generate_msg_uses_info_fields(self):
+            check = NonSargableCheck()
+            info = {
+                "relation": "orders",
+                "column": "status",
+                "func": "upper",
+                "filter": "(upper(status) = 'PAID'::text)",
+                "rows_read": 100000,
+            }
+            issues = check.generate_msg(info)
+            msg = issues[0].message
+            assert "'orders'" in msg
+            assert "'status'" in msg
+            assert "'upper(...)'" in msg
+            assert "upper(status)" in msg
+            assert issues[0].severity == "info"
+            assert issues[0].type == "non_sargable"
+
 class TestSummarizePlanNode:
     FIELDS = {
         "Relation Name":  "relation",
