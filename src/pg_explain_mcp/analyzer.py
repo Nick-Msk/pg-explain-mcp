@@ -404,11 +404,11 @@ class DiskSpillHashCheck(PlanCheckBase):
                     "(1) call list_parameters for hash_mem_multiplier; "
                     f"(2) divide the estimated full size ({info['estimated_mb']} MB) "
                     "by that value; "
-                "(3) round the result up to the next standard value from "
-                "{32, 64, 128, 256, 512, 1024} MB — never an intermediate "
-                "value like 74 or 80 MB; "
-                "(4) present as 'current X MB → recommended Y MB'. "
-                "Do not assume a default hash_mem_multiplier."
+                    "(3) round the result up to the next standard value from "
+                    "{32, 64, 128, 256, 512, 1024} MB — never an intermediate "
+                    "value like 74 or 80 MB; "
+                    "(4) present as 'current X MB → recommended Y MB'. "
+                    "Do not assume a default hash_mem_multiplier."
                 ),
                 node=info["node_type"],
             )
