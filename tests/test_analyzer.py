@@ -192,6 +192,12 @@ class TestEstimateMismatchCheck:
                 "node_type": "Seq Scan", "relation": "t"}
         assert check.validate_rule(info) is True
 
+    def test_gather_info_ignores_limit_parent(self):
+        check = EstimateMismatchCheck()
+        node = {"Node Type": "Index Scan", "Plan Rows": 999996, "Actual Rows": 5000}
+        assert check.gather_info(node, "Limit") is None
+        assert check.gather_info(node) is not None   # sanity
+
 class TestDiskSpillSortCheck:
     def test_in_memory_sort_is_ok(self):
         node = {"Node Type": "Sort", "Sort Method": "quicksort"}

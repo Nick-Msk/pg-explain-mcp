@@ -72,14 +72,22 @@ class PlanCheckBase(ABC):
     name: str
     type: str
 
-    def check(self, node: dict[str, Any]) -> list[Issue]:
-        info = self.gather_info(node)
+    def check(
+        self,
+        node: dict[str, Any],
+        parent_type: str = "",
+    ) -> list[Issue]:
+        info = self.gather_info(node, parent_type)
         if info is None or not self.validate_rule(info):
             return []
         return self.generate_msg(info)
 
     @abstractmethod
-    def gather_info(self, node: dict[str, Any]) -> dict[str, Any] | None:
+    def gather_info(
+        self,
+        node: dict[str, Any],
+        parent_type: str = "",
+    ) -> dict[str, Any] | None:
         ...
 
     @abstractmethod
@@ -134,7 +142,11 @@ class SeqScanCheck(PlanCheckBase):
         self.threshold_rows = threshold_rows
         self.min_filter_ratio = min_filter_ratio
 
-    def gather_info(self, node: dict[str, Any]) -> dict[str, Any] | None:
+    def gather_info(
+        self,
+        node: dict[str, Any],
+        parent_type: str = ""
+    ) -> dict[str, Any] | None:
         if node.get("Node Type") != "Seq Scan":
             return None
 
@@ -212,7 +224,15 @@ class EstimateMismatchCheck(PlanCheckBase):
         self.threshold_ratio = threshold_ratio
         self.min_rows = min_rows
 
-    def gather_info(self, node: dict[str, Any]) -> dict[str, Any] | None:
+    def gather_info(
+        self,
+        node: dict[str, Any],
+        parent_type: str = ""
+    ) -> dict[str, Any] | None:
+        # plan_rows under Limit is the full-scan estimate, not the
+        # truncated one. Comparing it to actual produces a spurious ratio.
+        if parent_type == "Limit":
+            return None
         planned = node.get("Plan Rows", 0)
         actual = node.get("Actual Rows", 0)
         if planned <= 0 or actual <= 0:
@@ -278,7 +298,11 @@ class DiskSpillSortCheck(PlanCheckBase):
     def __init__(self, min_spill_kb: int = 0) -> None:
         self.min_spill_kb = min_spill_kb
 
-    def gather_info(self, node: dict[str, Any]) -> dict[str, Any] | None:
+    def gather_info(
+        self,
+        node: dict[str, Any],
+        parent_type: str = ""
+    ) -> dict[str, Any] | None:
         method = node.get("Sort Method", "")
         if not method.startswith("external"):
             return None
@@ -359,7 +383,11 @@ class DiskSpillHashCheck(PlanCheckBase):
     def __init__(self, min_batches: int = 2) -> None:
         self.min_batches = min_batches
 
-    def gather_info(self, node: dict[str, Any]) -> dict[str, Any] | None:
+    def gather_info(
+        self,
+        node: dict[str, Any],
+        parent_type: str = ""
+    ) -> dict[str, Any] | None:
         batches = node.get("Hash Batches", 1)
         if batches <= 0:
             return None
@@ -441,7 +469,11 @@ class NestedLoopCheck(PlanCheckBase):
     ) -> None:
         self.threshold_loops = threshold_loops
 
-    def gather_info(self, node: dict[str, Any]) -> dict[str, Any] | None:
+    def gather_info(
+        self,
+        node: dict[str, Any],
+        parent_type: str = ""
+    ) -> dict[str, Any] | None:
         if node.get("Node Type") != "Nested Loop":
             return None
 
@@ -503,7 +535,11 @@ class BitmapHeapScanCheck(PlanCheckBase):
     def __init__(self, threshold_rows: int = 100_000) -> None:
         self.threshold_rows = threshold_rows
 
-    def gather_info(self, node: dict[str, Any]) -> dict[str, Any] | None:
+    def gather_info(
+        self,
+        node: dict[str, Any],
+        parent_type: str = ""
+    ) -> dict[str, Any] | None:
         if node.get("Node Type") != "Bitmap Heap Scan":
             return None
         return {
@@ -562,7 +598,11 @@ class IndexOnlyScanCheck(PlanCheckBase):
         self.min_rows = min_rows
         self.heap_fetch_ratio = heap_fetch_ratio
 
-    def gather_info(self, node: dict[str, Any]) -> dict[str, Any] | None:
+    def gather_info(
+        self,
+        node: dict[str, Any],
+        parent_type: str = ""
+    ) -> dict[str, Any] | None:
         if node.get("Node Type") != "Index Only Scan":
             return None
         heap_fetches = node.get("Heap Fetches", 0)
@@ -634,7 +674,11 @@ class IndexRegularScanCheck(PlanCheckBase):
         self.min_rows = min_rows
         self.min_disk_blocks = min_disk_blocks
 
-    def gather_info(self, node: dict[str, Any]) -> dict[str, Any] | None:
+    def gather_info(
+        self,
+        node: dict[str, Any],
+        parent_type: str = ""
+    ) -> dict[str, Any] | None:
         if node.get("Node Type") != "Index Scan":
             return None
         actual_rows = node.get("Actual Rows", 0)
@@ -700,7 +744,11 @@ class PartitionPruningCheck(PlanCheckBase):
     def __init__(self, max_children: int = 3) -> None:
         self.max_children = max_children
 
-    def gather_info(self, node: dict[str, Any]) -> dict[str, Any] | None:
+    def gather_info(
+        self,
+        node: dict[str, Any],
+        parent_type: str = ""
+    ) -> dict[str, Any] | None:
         if node.get("Node Type") not in ("Append", "Merge Append"):
             return None
 
@@ -789,7 +837,11 @@ class NonSargableCheck(PlanCheckBase):
         self.threshold_rows = threshold_rows
         self.relation_indexes = relation_indexes or {}
 
-    def gather_info(self, node: dict[str, Any]) -> dict[str, Any] | None:
+    def gather_info(
+        self,
+        node: dict[str, Any],
+        parent_type: str = ""
+    ) -> dict[str, Any] | None:
         filter_str = node.get("Filter", "")
         if not filter_str:
             return None
@@ -908,7 +960,7 @@ def _walk_plan(
 ) -> None:
     """Recursively traverse the plan tree, applying every check to each node."""
     for check in checks:
-        for issue in check.check(node):
+        for issue in check.check(node, parent_node):
             issues.append(issue.with_context(depth, parent_node))
 
     node_type = node.get("Node Type", "?")
