@@ -7,6 +7,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-09-27
+
+### Added
+
+- **Tags replace `check_class`.** The `check_classes` catalog and the
+  `checks.check_class` column are removed. A new `tags` catalog and
+  `checks_tags` junction table allow a check to belong to multiple
+  categories. A `checks_with_tags` view provides a compact list for
+  `--show` and external clients. Seed tags: `SCAN`, `SPILL`, `SORT`,
+  `HASH`, `JOIN`, `INDEX`, `ESTIMATE`, `PARTITION`.
+
+### Changed
+
+- **All 10 checks migrated to `PlanCheckBase` ABC.** Each check is
+  split into three phases: `gather_info`, `validate_rule`,
+  `generate_msg`. The public `check(node)` entry point is unchanged;
+  behaviour is identical for existing calls. `PlanCheckBase` uses
+  `@abstractmethod` — incomplete subclasses fail at instantiation
+  rather than at call time.
+
+- **`IndexScanCheck` split into two classes.**
+  `IndexRegularScanCheck` (`type = index_scan_poor_clustering`) and
+  `IndexOnlyScanCheck` (`type = index_only_scan_stale_vm`) are
+  separate checks with distinct node types, thresholds, and severities.
+  Registered as `num = 7` and `num = 8` in `seed.sql`.
+
+- **`EstimateMismatchCheck` skips nodes under `Limit`.** The planner's
+  `plan_rows` on a node below a `Limit` is the full-scan estimate, not
+  the truncated one. Comparing it against `actual_rows` produced a
+  spurious 200× ratio on every `ORDER BY … LIMIT N` query. The check
+  now receives `parent_type` from the walker and returns `None` when
+  the parent is `Limit`.
+
+- **`IndexOnlyScanCheck` applies `min_rows` to `actual_rows`, not to
+  `heap_fetches`.** A stale visibility map on a small scan (440 rows,
+  594 heap fetches) was previously below the absolute floor of 1000
+  heap fetches and stayed silent. The floor now reflects the scan's
+  size, not the symptom's magnitude. `min_rows` in `seed.sql` is
+  lowered from 1000 to 100.
+
+### Removed
+
+- **`DiskSpillSortUnsizedCheck`.** PostgreSQL 14+ always reports
+  `Sort Space Type` and `Sort Space Used` for external sorts. The
+  defensive branch never fired on real plans.
+
+- **`IndexScanCheck`.** Replaced by the two specialised classes above.
+
+### Fixed
+
+- `DiskSpillHashCheck`: message simplified after several iterations.
+  The extended wording (before/after pair, standard-set rounding)
+  caused the model to skip `list_parameters` and hedge with
+  hypothetical values. The plain form reliably triggers the correct
+  call and produces a valid recommendation.
+
+### Documentation
+
+- `usage_examples/` reorganised. The old
+  `pg_index_scan_adapters/` directory is replaced by:
+  - `pg_index_only_scan_adapters/` — fresh vs. stale visibility map.
+  - `pg_index_regular_scan_adapters/` — warm vs. cold cache.
+- All new examples include the LLM used during capture
+  (`qwen 3.8 27b-splash` via LM Studio) in a `## test environment`
+  section.
+
 ## [0.3.0] — 2026-09-23
 
 ### Added
@@ -246,8 +312,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The analyzer enforces read-only access at the transaction level.
 - `mcp` dependency is pinned to `<2.0.0` for SDK compatibility.
 
-[Unreleased]: https://github.com/Nick-Msk/pg-explain-mcp/compare/v0.3.0...HEAD
-[0.3.0]: https://github.com/Nick-Msk/pg-explain-mcp/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/Nick-Msk/pg-explain-mcp/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Nick-Msk/pg-explain-mcp/releases/tag/v0.1.0
+[0.2.0]: https://github.com/Nick-Msk/pg-explain-mcp/compare/v0.1.0...v0.2.0
+[0.3.0]: https://github.com/Nick-Msk/pg-explain-mcp/compare/v0.2.0...v0.3.0
+[0.4.0]: https://github.com/Nick-Msk/pg-explain-mcp/compare/v0.3.0...v0.4.0
+[Unreleased]: https://github.com/Nick-Msk/pg-explain-mcp/compare/v0.4.0...HEAD
 

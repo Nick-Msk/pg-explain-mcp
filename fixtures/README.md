@@ -113,6 +113,24 @@ statistics**, autovacuum is disabled at the table level so the
 | `data_index_scan_unclastered`      | a fresh visibility map would hide the problem  |
 | `data_estimate_mismatch_skewed`    | autovacuum's `ANALYZE` would overwrite fake stats |
 
+### About CLUSTER
+
+`fill_index_scan` inserts rows in `generate_series` order (`n = 1, 2, 3, …`)
+while the index is on `md5(n)`. The result is a heap that is **not**
+clustered by the index — consecutive index entries point to scattered
+heap pages. For the `_norm` table we want the opposite: a well-clustered
+heap so `IndexRegularScanCheck` stays silent.
+
+`CLUSTER` cannot run inside `fill_*` procedures (plpgsql bodies execute
+in a single transaction). Run it from `psql` after filling:
+
+```sql
+cluster mcp_explain_tool.data_index_scan_norm using idx_data_index_scan_norm_val;
+```
+
+The `_unclastered` table is intentionally left unclustered — that is
+what makes `IndexRegularScanCheck` fire against it.
+
 ## Clear
 
 ```sql

@@ -109,6 +109,7 @@ variables:
 | `PG_PASSWORD`    | —           | Database password          |
 | `PG_DATABASE`    | `postgres`  | Database name              |
 | `TARGET_DB_TYPE` | `postgres`  | Database (pg/orcl/mysql..) |
+
 ### Check registry
 
 Enabled checks and their thresholds live in a small SQLite database at

@@ -20,6 +20,7 @@ and `shared_read_blocks`.
 | Python             | 3.12.14 (Homebrew)                          |
 | MCP client         | Continue.dev                                |
 | LLM                | `google/gemma-4-26b-a4b-qat` via LM Studio  |
+| LLM                | `qwen 3.8 27b-splash` via LM Studio         |
 
 The two tables per adapter are sized so that:
 
