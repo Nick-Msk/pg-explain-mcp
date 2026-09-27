@@ -8,19 +8,21 @@ insert into databases (database) values
 
 insert into check_classes (name) values
     ('GENERAL'),
-    ('INDEX');
+    ('INDEX'),
+    ('SORT');
 
 insert into checks (num, database, name, check_class, description, enabled) values
-    (1, 'postgres', 'SeqScanCheck',          'GENERAL', 'sequential scan that discards most rows',               1),
-    (2, 'postgres', 'EstimateMismatchCheck', 'GENERAL', 'planner cardinality misestimate',                       1),
-    (3, 'postgres', 'DiskSpillSortCheck',    'GENERAL', 'sort spilling to disk',                                 1),
-    (4, 'postgres', 'DiskSpillHashCheck',    'GENERAL', 'hash operation using multiple batches',                 1),
-    (5, 'postgres', 'NestedLoopCheck',       'GENERAL', 'Nested Loop with many inner iterations',                1),
-    (6, 'postgres', 'BitmapHeapScanCheck',   'GENERAL', 'large Bitmap Heap Scan',                                1),
-    (7, 'postgres', 'IndexRegularScanCheck', 'INDEX',   'index scan reading too many blocks for rows returned',  0),
-    (8, 'postgres', 'IndexOnlyScanCheck',    'INDEX',   'index only scan with stale visibility map',             0),
-    (9, 'postgres', 'PartitionPruningCheck', 'GENERAL', 'Append over many partitions — pruning may have failed', 1),
-    (10,'postgres', 'NonSargableCheck',      'GENERAL', 'non-sargable predicate on an indexed column',           1);
+    (1,  'postgres', 'SeqScanCheck',                'GENERAL', 'sequential scan that discards most rows',               1),
+    (2,  'postgres', 'EstimateMismatchCheck',       'GENERAL', 'planner cardinality misestimate',                       1),
+    (3,  'postgres', 'DiskSpillSortSizedCheck',     'SORT',    'sort spilling to disk — size known',                    1),
+    (4,  'postgres', 'DiskSpillHashCheck',          'GENERAL', 'hash operation using multiple batches',                 1),
+    (5,  'postgres', 'NestedLoopCheck',             'GENERAL', 'Nested Loop with many inner iterations',                1),
+    (6,  'postgres', 'BitmapHeapScanCheck',         'GENERAL', 'large Bitmap Heap Scan',                                1),
+    (7,  'postgres', 'IndexRegularScanCheck',       'INDEX',   'index scan reading too many blocks for rows returned',  0),
+    (8,  'postgres', 'IndexOnlyScanCheck',          'INDEX',   'index only scan with stale visibility map',             0),
+    (9,  'postgres', 'PartitionPruningCheck',       'GENERAL', 'Append over many partitions — pruning may have failed', 1),
+    (10, 'postgres', 'NonSargableCheck',            'GENERAL', 'non-sargable predicate on an indexed column',           1),
+    (11, 'postgres', 'DiskSpillSortUnsizedCheck',   'SORT',    'sort spilling to disk — size unknown',                  1);
 
 insert into check_params (num, database, param, value, default_value) values
     (1, 'postgres', 'threshold_rows',    '1000',   '1000'),

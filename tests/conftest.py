@@ -8,7 +8,9 @@ config database and its seed state.
 from pg_explain_mcp.analyzer import (
     BitmapHeapScanCheck,
     DiskSpillHashCheck,
-    DiskSpillSortCheck,
+    #DiskSpillSortCheck,
+    DiskSpillSortSizedCheck,
+    DiskSpillSortUnsizedCheck,
     EstimateMismatchCheck,
     IndexScanCheck,
     NestedLoopCheck,
@@ -20,7 +22,9 @@ from pg_explain_mcp.analyzer import (
 ALL_CHECKS = (
     SeqScanCheck(),
     EstimateMismatchCheck(),
-    DiskSpillSortCheck(),
+    #DiskSpillSortCheck(),
+    DiskSpillSortSizedCheck(),
+    DiskSpillSortUnsizedCheck(),
     DiskSpillHashCheck(),
     NestedLoopCheck(),
     BitmapHeapScanCheck(),

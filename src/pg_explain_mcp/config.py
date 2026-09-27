@@ -9,7 +9,9 @@ from typing import Any, Callable
 from pg_explain_mcp.analyzer import (
     BitmapHeapScanCheck,
     DiskSpillHashCheck,
-    DiskSpillSortCheck,
+    #DiskSpillSortCheck,
+    DiskSpillSortSizedCheck,
+    DiskSpillSortUnsizedCheck,
     EstimateMismatchCheck,
     IndexScanCheck,
     NestedLoopCheck,
@@ -33,8 +35,13 @@ _REGISTRY: dict[str, tuple[type, dict[str, Callable[[str], Any]]]] = {
         "threshold_ratio": float,
         "min_rows":        int,
     }),
-    "DiskSpillSortCheck": (DiskSpillSortCheck, {
+    #"DiskSpillSortCheck": (DiskSpillSortCheck, {
+    #    "min_spill_kb": int,
+    #}),
+    "DiskSpillSortSizedCheck": (DiskSpillSortSizedCheck, {
         "min_spill_kb": int,
+    }),
+    "DiskSpillSortUnsizedCheck": (DiskSpillSortUnsizedCheck, {
     }),
     "DiskSpillHashCheck": (DiskSpillHashCheck, {
         "min_batches": int,

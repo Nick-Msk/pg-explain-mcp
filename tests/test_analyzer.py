@@ -3,7 +3,9 @@
 from pg_explain_mcp.analyzer import (
     BitmapHeapScanCheck,
     DiskSpillHashCheck,
-    DiskSpillSortCheck,
+    DiskSpillSortSizedCheck,
+    #DiskSpillSortCheck,
+    DiskSpillSortUnsizedCheck,
     EstimateMismatchCheck,
     IndexScanCheck,
     NestedLoopCheck,
@@ -191,10 +193,10 @@ class TestEstimateMismatchCheck:
                 "node_type": "Seq Scan", "relation": "t"}
         assert check.validate_rule(info) is True
 
-class TestDiskSpillSortCheck:
+class TestDiskSpillSortSizedCheck:
     def test_in_memory_sort_is_ok(self):
         node = {"Node Type": "Sort", "Sort Method": "quicksort"}
-        assert DiskSpillSortCheck().check(node) == []
+        assert DiskSpillSortSizedCheck().check(node) == []
 
     def test_external_sort_is_reported(self):
         node = {
@@ -203,7 +205,7 @@ class TestDiskSpillSortCheck:
             "Sort Space Type": "Disk",
             "Sort Space Used": 221208,
         }
-        issues = DiskSpillSortCheck().check(node)
+        issues = DiskSpillSortSizedCheck().check(node)
         assert len(issues) == 1
         assert issues[0].type == "disk_spill_sort"
         assert "221208kB" in issues[0].message
@@ -216,16 +218,11 @@ class TestDiskSpillSortCheck:
             "Sort Space Type": "Disk",
             "Sort Space Used": 221208,
         }
-        issues = DiskSpillSortCheck().check(node)
+        issues = DiskSpillSortSizedCheck().check(node)
         msg = issues[0].message
         assert "set work_mem to at least" in msg
         assert "hash_mem_multiplier does not apply" in msg
         assert "Current work_mem is not part of this calculation" in msg
-
-    def test_missing_fields_do_not_crash(self):
-        node = {"Node Type": "Sort", "Sort Method": "external merge"}
-        issues = DiskSpillSortCheck().check(node)
-        assert len(issues) == 1
 
     def test_message_contains_absolute_value(self):
         node = {
@@ -234,12 +231,36 @@ class TestDiskSpillSortCheck:
             "Sort Space Type": "Disk",
             "Sort Space Used": 221208,
         }
-        issues = DiskSpillSortCheck().check(node)
+        issues = DiskSpillSortSizedCheck().check(node)
         msg = issues[0].message
         assert "221208kB" in msg
         assert "216.0 MB" in msg
         assert "256 MB" in msg
         assert "Current work_mem is not part of" in msg
+
+class TestDiskSpillSortUnsizedCheck:
+    def test_in_memory_sort_is_ok(self):
+        check = DiskSpillSortUnsizedCheck()
+        assert check.check({"Node Type": "Sort", "Sort Method": "quicksort"}) == []
+
+    def test_sized_spill_is_not_handled_here(self):
+        """Sized spills belong to DiskSpillSortSizedCheck."""
+        check = DiskSpillSortUnsizedCheck()
+        node = {
+            "Node Type": "Sort",
+            "Sort Method": "external merge",
+            "Sort Space Type": "Disk",
+            "Sort Space Used": 221208,
+        }
+        assert check.check(node) == []
+
+    def test_unsized_external_sort_is_reported(self):
+        check = DiskSpillSortUnsizedCheck()
+        node = {"Node Type": "Sort", "Sort Method": "external merge"}
+        issues = check.check(node)
+        assert len(issues) == 1
+        assert issues[0].type == "disk_spill_sort"
+        assert "does not report a size" in issues[0].message
 
 class TestDiskSpillHashCheck:
     def test_single_batch_is_ok(self):
