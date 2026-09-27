@@ -65,7 +65,8 @@ insert into check_params (num, database, param, value, default_value) values
     (6, 'postgres', 'threshold_rows',    '100000', '100000'),
     (7, 'postgres', 'min_rows',          '1000',   '1000'),
     (7, 'postgres', 'min_disk_blocks',   '100',    '100'),
-    (8, 'postgres', 'min_rows',          '1000',   '1000'),
+    --(8, 'postgres', 'min_rows',          '1000',   '1000'),
+    (8, 'postgres', 'min_rows',          '100',    '100'),
     (8, 'postgres', 'heap_fetch_ratio',  '0.10',   '0.10'),
     (9, 'postgres', 'max_children',      '3',      '3'),
     (10,'postgres', 'threshold_rows',    '1000',   '1000');

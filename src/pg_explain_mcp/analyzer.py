@@ -618,7 +618,9 @@ class IndexOnlyScanCheck(PlanCheckBase):
         }
 
     def validate_rule(self, info: dict[str, Any]) -> bool:
-        if info["heap_fetches"] < self.min_rows:
+        if info["actual_rows"] < self.min_rows:
+            return False
+        if info["heap_fetches"] == 0:
             return False
         return info["ratio"] >= self.heap_fetch_ratio
 

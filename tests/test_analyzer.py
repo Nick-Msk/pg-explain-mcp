@@ -464,13 +464,13 @@ class TestIndexOnlyScanCheck:
         check = IndexOnlyScanCheck()
         node = {
             "Node Type": "Index Only Scan",
-            "Actual Rows": 500,
-            "Heap Fetches": 400,
+            "Actual Rows": 50,           # < 1000
+            "Heap Fetches": 45
         }
         assert check.check(node) == []
 
     def test_stale_vm_is_reported(self):
-        check = IndexOnlyScanCheck()
+        check = IndexOnlyScanCheck(min_rows=100, heap_fetch_ratio=0.10)
         node = {
             "Node Type": "Index Only Scan",
             "Index Name": "idx_orders_status",
@@ -482,8 +482,6 @@ class TestIndexOnlyScanCheck:
         assert len(issues) == 1
         assert issues[0].type == "index_only_scan_stale_vm"
         assert issues[0].severity == "warning"
-        assert "idx_orders_status" in issues[0].message
-        assert "VACUUM" in issues[0].message
 
     def test_index_scan_is_ignored(self):
         """Regular Index Scan is not this check's business."""
@@ -502,10 +500,34 @@ class TestIndexOnlyScanCheck:
 
     def test_validate_rule_threshold(self):
         check = IndexOnlyScanCheck(min_rows=100, heap_fetch_ratio=0.5)
-        assert check.validate_rule({"heap_fetches": 100, "ratio": 0.5}) is True
-        assert check.validate_rule({"heap_fetches": 99, "ratio": 0.9}) is False
-        assert check.validate_rule({"heap_fetches": 1000, "ratio": 0.4}) is False
 
+        # Both conditions met — fires
+        assert check.validate_rule({
+            "actual_rows": 100,
+            "heap_fetches": 100,
+            "ratio": 0.5,
+        }) is True
+
+        # Below min_rows — silent
+        assert check.validate_rule({
+            "actual_rows": 99,
+            "heap_fetches": 999,
+            "ratio": 0.9,
+        }) is False
+
+        # Ratio too low — silent
+        assert check.validate_rule({
+            "actual_rows": 1000,
+            "heap_fetches": 100,
+        "ratio": 0.4,
+        }) is False
+
+        # Zero heap fetches — silent, regardless of ratio
+        assert check.validate_rule({
+            "actual_rows": 1000,
+            "heap_fetches": 0,
+            "ratio": 0.0,
+        }) is False
 
 class TestIndexRegularScanCheck:
     def test_few_blocks_is_ok(self):

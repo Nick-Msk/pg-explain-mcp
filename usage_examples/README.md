@@ -67,23 +67,19 @@ prompt:
 
 ---
 
-## IndexScanCheck: before / after
-
-Reproducible two-part scenario backed by
-`mcp_explain_tool.data_index_scan_norm` and
-`mcp_explain_tool.data_index_scan_unclastered`.
-
-Prerequisites:
-
-```sql
-call mcp_explain_tool.fill_index_scan(5000000);
-vacuum analyze mcp_explain_tool.data_index_scan_norm;
-```
+## IndexOnlyScanCheck: fresh vs. stale visibility map
 
 | Example | What it demonstrates |
 |---|---|
-| [Index Scan on a healthy table](pg_index_scan_adapters/sample_index_on_normal.md) | Index Only Scan with `Heap Fetches = 0`, no warnings |
-| [Index Scan after heavy churn](pg_index_scan_adapters/sample_index_on_unclastered.md) | Stale visibility map, `index_scan_heap_locality` warning, then recovery after `VACUUM` |
+| [Fresh visibility map](pg_index_only_scan_adapters/sample_index_only_scan_norm.md) | `heap_fetches: 0`, no warnings |
+| [Stale visibility map](pg_index_only_scan_adapters/sample_index_only_scan_unclastered.md) | `heap_fetches` > rows, `index_only_scan_stale_vm` fires |
+
+## IndexRegularScanCheck: warm vs. cold cache
+
+| Example | What it demonstrates |
+|---|---|
+| [Warm cache](pg_index_regular_scan_adapters/sample_index_regular_scan_norm.md) | `shared_read_blocks: 0`, no warnings |
+| [Cold cache, large LIMIT](pg_index_regular_scan_adapters/sample_index_regular_scan_unclastered.md) | `shared_read_blocks: 57194`, `index_scan_poor_clustering` fires |
 
 ---
 
