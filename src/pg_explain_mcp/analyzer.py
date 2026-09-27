@@ -407,7 +407,7 @@ class DiskSpillHashCheck(PlanCheckBase):
             )
         ]
 
-class NestedLoopCheck:
+class NestedLoopCheck(PlanCheckBase):
     """Nested Loop with a high number of inner iterations.
 
     PostgreSQL reports the loop count on the **inner** child
@@ -419,8 +419,16 @@ class NestedLoopCheck:
     check is emitted at ``INFO`` level as a heads-up for future
     growth, not as a warning.
 
-    Related inefficiencies caused by misestimated cardinality are
-    reported separately by ``EstimateMismatchCheck``.
+    ``gather_info`` returns:
+
+        {
+            "loops":          int,    # inner-side iteration count
+            "inner_type":     str,
+            "inner_relation": str,
+            "inner_avg_rows": float,
+        }
+
+    Fires at ``INFO`` level.
     """
 
     name = "NestedLoopCheck"
@@ -429,38 +437,41 @@ class NestedLoopCheck:
     def __init__(
         self,
         threshold_loops: int = 1000,
-        threshold_rows: int = 100000,
+        **_ignored: Any,
     ) -> None:
         self.threshold_loops = threshold_loops
-        self.threshold_rows = threshold_rows
 
-    def check(self, node: dict[str, Any]) -> list[Issue]:
+    def gather_info(self, node: dict[str, Any]) -> dict[str, Any] | None:
         if node.get("Node Type") != "Nested Loop":
-            return []
+            return None
 
         plans = node.get("Plans", [])
         if len(plans) < 2:
-            return []
+            return None
 
         inner = plans[1]
-        loops = inner.get("Actual Loops", 1)
-        if loops <= self.threshold_loops:
-            return []
+        return {
+            "loops": inner.get("Actual Loops", 1),
+            "inner_type": inner.get("Node Type", "?"),
+            "inner_relation": inner.get("Relation Name", "?"),
+            "inner_avg_rows": inner.get("Actual Rows", 0),
+        }
 
-        inner_type = inner.get("Node Type", "?")
-        inner_relation = inner.get("Relation Name", "?")
-        inner_avg = inner.get("Actual Rows", 0)
+    def validate_rule(self, info: dict[str, Any]) -> bool:
+        return info["loops"] > self.threshold_loops
 
+    def generate_msg(self, info: dict[str, Any]) -> list[Issue]:
         return [
             Issue(
                 severity=SEVERITY_INFO,
                 type=self.type,
                 message=(
-                    f"Nested Loop ran the inner side {loops} times "
-                    f"('{inner_type}' on '{inner_relation}', ~{inner_avg:.2f} "
-                    "rows per loop). This is optimal for the current data, "
-                    "but execution time grows linearly with the outer row "
-                    "count — re-check if the outer side becomes much larger."
+                    f"Nested Loop ran the inner side {info['loops']} times "
+                    f"('{info['inner_type']}' on '{info['inner_relation']}', "
+                    f"~{info['inner_avg_rows']:.2f} rows per loop). "
+                    "This is optimal for the current data, but execution "
+                    "time grows linearly with the outer row count — "
+                    "re-check if the outer side becomes much larger."
                 ),
                 node="Nested Loop",
             )

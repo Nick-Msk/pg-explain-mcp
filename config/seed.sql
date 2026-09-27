@@ -11,6 +11,7 @@ insert into tags (name) values
     ('SPILL'),
     ('INDEX'),
     ('SORT'),
+    ('JOIN'),
     ('HASH');
 
 insert into checks (num, database, name, description, enabled) values
@@ -32,7 +33,7 @@ insert into checks_tags (num, database, tag) values
     (3,  'postgres', 'SORT'),
     (4,  'postgres', 'SPILL'),
     (4,  'postgres', 'HASH'),
-    (5,  'postgres', 'GENERAL'),
+    (5,  'postgres', 'JOIN'),
     (6,  'postgres', 'GENERAL'),
     (7,  'postgres', 'GENERAL'),
     (7,  'postgres', 'INDEX'),
@@ -49,7 +50,7 @@ insert into check_params (num, database, param, value, default_value) values
     (3, 'postgres', 'min_spill_kb',      '0',      '0'),
     (4, 'postgres', 'min_batches',       '2',      '2'),
     (5, 'postgres', 'threshold_loops',   '1000',   '1000'),
-    (5, 'postgres', 'threshold_rows',    '100000', '100000'),
+    -- (5, 'postgres', 'threshold_rows',    '100000', '100000'),
     (6, 'postgres', 'threshold_rows',    '100000', '100000'),
     (7, 'postgres', 'min_rows',          '1000',   '1000'),
     (7, 'postgres', 'min_disk_blocks',   '100',    '100'),

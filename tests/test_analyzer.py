@@ -191,7 +191,7 @@ class TestEstimateMismatchCheck:
                 "node_type": "Seq Scan", "relation": "t"}
         assert check.validate_rule(info) is True
 
-class TestDiskSpillSortSizedCheck:
+class TestDiskSpillSortCheck:
     def test_in_memory_sort_is_ok(self):
         node = {"Node Type": "Sort", "Sort Method": "quicksort"}
         assert DiskSpillSortCheck().check(node) == []
@@ -348,6 +348,41 @@ class TestNestedLoopCheck:
     def test_other_node_type_is_ignored(self):
         node = {"Node Type": "Hash Join", "Plans": [{"Actual Loops": 99999}]}
         assert NestedLoopCheck().check(node) == []
+
+    def test_gather_info_returns_none_for_wrong_node(self):
+        check = NestedLoopCheck()
+        assert check.gather_info({"Node Type": "Hash Join"}) is None
+
+    def test_gather_info_returns_none_for_missing_inner(self):
+        check = NestedLoopCheck()
+        node = {"Node Type": "Nested Loop", "Plans": [{"Node Type": "Seq Scan"}]}
+        assert check.gather_info(node) is None
+
+    def test_gather_info_reads_inner_child(self):
+        check = NestedLoopCheck()
+        node = {
+            "Node Type": "Nested Loop",
+            "Plans": [
+                {"Node Type": "Seq Scan", "Actual Loops": 1},
+                {
+                    "Node Type": "Index Only Scan",
+                    "Relation Name": "inner_t",
+                    "Actual Loops": 5000,
+                    "Actual Rows": 0.98,
+                },
+            ],
+        }
+        info = check.gather_info(node)
+        assert info["loops"] == 5000
+        assert info["inner_type"] == "Index Only Scan"
+        assert info["inner_relation"] == "inner_t"
+        assert info["inner_avg_rows"] == 0.98
+
+    def test_validate_rule_threshold(self):
+        check = NestedLoopCheck(threshold_loops=100)
+        assert check.validate_rule({"loops": 101}) is True
+        assert check.validate_rule({"loops": 100}) is False
+        assert check.validate_rule({"loops": 50}) is False
 
 class TestBitmapHeapScanCheck:
     def test_small_bitmap_is_ok(self):
