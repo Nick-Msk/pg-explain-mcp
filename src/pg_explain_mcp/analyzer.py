@@ -528,93 +528,139 @@ class BitmapHeapScanCheck(PlanCheckBase):
             )
         ]
 
-class IndexScanCheck:
-    """Index Scan / Index Only Scan with poor heap locality.
+class IndexOnlyScanCheck(PlanCheckBase):
+    """Index Only Scan with a stale visibility map.
 
-    Two scenarios are detected:
+    The planner chose an Index Only Scan because the index covers the
+    predicate. But the visibility map is stale — the engine cannot
+    trust the index to determine tuple visibility, so it falls back
+    to the heap for each row. The result is worse than a plain Index
+    Scan: index traversal plus random heap reads.
 
-    1. **Index Only Scan** with a high number of ``Heap Fetches``. This
-       means the visibility map is stale — the engine still has to visit
-       the heap for most rows, defeating the purpose of an index-only scan.
-       Fix: run ``VACUUM``, or consider ``CLUSTER`` to improve locality.
+    ``gather_info`` returns:
 
-    2. **Index Scan** reading many blocks from disk relative to the number
-       of rows returned. This indicates poor clustering: the heap rows are
-       scattered, causing random I/O. Fix: ``CLUSTER`` on the index used.
+        {
+            "heap_fetches": int,
+            "actual_rows":  float,
+            "ratio":        float,   # heap_fetches / actual_rows
+            "index_name":   str,
+            "relation":     str,
+        }
+
+    Fires at ``WARNING`` level.
     """
 
-    name = "IndexScanCheck"
-    type = "index_scan_heap_locality"
+    name = "IndexOnlyScanCheck"
+    type = "index_only_scan_stale_vm"
 
     def __init__(
         self,
         min_rows: int = 1000,
         heap_fetch_ratio: float = 0.10,
-        min_disk_blocks: int = 100,
+        **_ignored: Any,
     ) -> None:
         self.min_rows = min_rows
         self.heap_fetch_ratio = heap_fetch_ratio
-        self.min_disk_blocks = min_disk_blocks
 
-    def check(self, node: dict[str, Any]) -> list[Issue]:
-        node_type = node.get("Node Type", "")
-
-        if node_type == "Index Only Scan":
-            return self._check_index_only(node)
-        if node_type == "Index Scan":
-            return self._check_regular_index(node)
-        return []
-
-    # ------------------------------------------------------------------
-    # Internals
-    # ------------------------------------------------------------------
-
-    def _check_index_only(self, node: dict[str, Any]) -> list[Issue]:
+    def gather_info(self, node: dict[str, Any]) -> dict[str, Any] | None:
+        if node.get("Node Type") != "Index Only Scan":
+            return None
         heap_fetches = node.get("Heap Fetches", 0)
         actual_rows = node.get("Actual Rows", 0)
+        if heap_fetches <= 0 or actual_rows <= 0:
+            return None
+        return {
+            "heap_fetches": heap_fetches,
+            "actual_rows": actual_rows,
+            "ratio": heap_fetches / actual_rows,
+            "index_name": node.get("Index Name", "?"),
+            "relation": node.get("Relation Name", "?"),
+        }
 
-        if heap_fetches < self.min_rows:
-            return []
-        if actual_rows > 0 and heap_fetches / actual_rows < self.heap_fetch_ratio:
-            return []
+    def validate_rule(self, info: dict[str, Any]) -> bool:
+        if info["heap_fetches"] < self.min_rows:
+            return False
+        return info["ratio"] >= self.heap_fetch_ratio
 
-        index_name = node.get("Index Name", "?")
-        relation = node.get("Relation Name", "?")
-        ratio_pct = (heap_fetches / actual_rows * 100) if actual_rows else 0
-
+    def generate_msg(self, info: dict[str, Any]) -> list[Issue]:
+        pct = info["ratio"] * 100
         return [
             Issue(
                 severity=SEVERITY_WARNING,
                 type=self.type,
                 message=(
-                    f"Index Only Scan on '{index_name}' ({relation}) "
-                    f"performed {heap_fetches} heap fetches for {actual_rows} rows "
-                    f"({ratio_pct:.1f}%). The visibility map is stale. "
-                    "Run VACUUM, or consider CLUSTER to improve locality."
+                    f"Index Only Scan on '{info['index_name']}' "
+                    f"({info['relation']}) performed "
+                    f"{info['heap_fetches']} heap fetches for "
+                    f"{info['actual_rows']} rows ({pct:.1f}%). "
+                    "The visibility map is stale. Run VACUUM, or "
+                    "consider CLUSTER to improve locality."
                 ),
                 node="Index Only Scan",
             )
         ]
 
-    def _check_regular_index(self, node: dict[str, Any]) -> list[Issue]:
+class IndexRegularScanCheck(PlanCheckBase):
+    """Index Scan reading too many disk blocks for the rows returned.
+
+    A plain Index Scan always visits the heap for each matching row.
+    When the heap is poorly clustered by the indexed column, those
+    visits are scattered across many blocks, and the scan reads far
+    more pages than the number of rows suggests. ``CLUSTER`` on the
+    index physically reorders the heap so subsequent scans read fewer
+    blocks.
+
+    ``gather_info`` returns:
+
+        {
+            "actual_rows": float,
+            "read_blocks": int,
+            "index_name":  str,
+            "relation":    str,
+        }
+
+    Fires at ``INFO`` level — this is a hint, not a defect.
+    """
+
+    name = "IndexRegularScanCheck"
+    type = "index_scan_poor_clustering"
+
+    def __init__(
+        self,
+        min_rows: int = 1000,
+        min_disk_blocks: int = 100,
+        **_ignored: Any,
+    ) -> None:
+        self.min_rows = min_rows
+        self.min_disk_blocks = min_disk_blocks
+
+    def gather_info(self, node: dict[str, Any]) -> dict[str, Any] | None:
+        if node.get("Node Type") != "Index Scan":
+            return None
         actual_rows = node.get("Actual Rows", 0)
-        read_blocks = node.get("Shared Read Blocks", 0)
+        if actual_rows <= 0:
+            return None
+        return {
+            "actual_rows": actual_rows,
+            "read_blocks": node.get("Shared Read Blocks", 0),
+            "index_name": node.get("Index Name", "?"),
+            "relation": node.get("Relation Name", "?"),
+        }
 
-        if actual_rows < self.min_rows:
-            return []
-        if read_blocks < self.min_disk_blocks:
-            return []
+    def validate_rule(self, info: dict[str, Any]) -> bool:
+        if info["actual_rows"] < self.min_rows:
+            return False
+        return info["read_blocks"] >= self.min_disk_blocks
 
-        index_name = node.get("Index Name", "?")
-        relation = node.get("Relation Name", "?")
-
+    def generate_msg(self, info: dict[str, Any]) -> list[Issue]:
         return [
             Issue(
                 severity=SEVERITY_INFO,
                 type=self.type,
                 message=(
-                    f"Index Scan on '{index_name}' ({relation}) read "
-                    f"{read_blocks} blocks from disk for {actual_rows} rows. "
+                    f"Index Scan on '{info['index_name']}' "
+                    f"({info['relation']}) read {info['read_blocks']} "
+                    f"blocks from disk for {info['actual_rows']} rows. "
                     "Poor heap clustering may be causing random I/O. "
                     "Consider CLUSTER on this index."
                 ),

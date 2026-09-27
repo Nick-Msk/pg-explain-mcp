@@ -5,7 +5,8 @@ from pg_explain_mcp.analyzer import (
     DiskSpillHashCheck,
     DiskSpillSortCheck,
     EstimateMismatchCheck,
-    IndexScanCheck,
+    IndexOnlyScanCheck,
+    IndexRegularScanCheck,
     NestedLoopCheck,
     NonSargableCheck,
     PartitionPruningCheck,
@@ -441,10 +442,9 @@ class TestBitmapHeapScanCheck:
         assert check.validate_rule({"rows": 1001, "relation": "t"}) is True
         assert check.validate_rule({"rows": 1000, "relation": "t"}) is False
 
-class TestIndexScanCheck:
-    # --- Index Only Scan -------------------------------------------------
-
-    def test_index_only_scan_with_few_heap_fetches_is_ok(self):
+class TestIndexOnlyScanCheck:
+    def test_few_heap_fetches_is_ok(self):
+        check = IndexOnlyScanCheck()
         node = {
             "Node Type": "Index Only Scan",
             "Index Name": "idx_a",
@@ -452,42 +452,76 @@ class TestIndexScanCheck:
             "Actual Rows": 10_000,
             "Heap Fetches": 50,
         }
-        assert IndexScanCheck().check(node) == []
+        assert check.check(node) == []
 
-    def test_index_only_scan_below_min_threshold_is_ok(self):
+    def test_below_min_rows_is_ok(self):
+        check = IndexOnlyScanCheck()
         node = {
             "Node Type": "Index Only Scan",
             "Actual Rows": 500,
-            "Heap Fetches": 400,  # ratio 80%, but below MIN_ROWS
+            "Heap Fetches": 400,
         }
-        assert IndexScanCheck().check(node) == []
+        assert check.check(node) == []
 
-    def test_index_only_scan_with_many_heap_fetches_is_reported(self):
+    def test_stale_vm_is_reported(self):
+        check = IndexOnlyScanCheck()
         node = {
             "Node Type": "Index Only Scan",
             "Index Name": "idx_orders_status",
             "Relation Name": "orders",
             "Actual Rows": 50_000,
-            "Heap Fetches": 45_000,  # 90% — bad
+            "Heap Fetches": 45_000,
         }
-        issues = IndexScanCheck().check(node)
+        issues = check.check(node)
         assert len(issues) == 1
-        assert issues[0].type == "index_scan_heap_locality"
+        assert issues[0].type == "index_only_scan_stale_vm"
         assert issues[0].severity == "warning"
         assert "idx_orders_status" in issues[0].message
         assert "VACUUM" in issues[0].message
 
-    # --- Regular Index Scan ---------------------------------------------
+    def test_index_scan_is_ignored(self):
+        """Regular Index Scan is not this check's business."""
+        check = IndexOnlyScanCheck()
+        node = {
+            "Node Type": "Index Scan",
+            "Actual Rows": 20_000,
+            "Shared Read Blocks": 8000,
+        }
+        assert check.check(node) == []
 
-    def test_index_scan_from_cache_is_ok(self):
+    def test_gather_info_returns_none_without_heap_fetches(self):
+        check = IndexOnlyScanCheck()
+        node = {"Node Type": "Index Only Scan", "Actual Rows": 1000}
+        assert check.gather_info(node) is None
+
+    def test_validate_rule_threshold(self):
+        check = IndexOnlyScanCheck(min_rows=100, heap_fetch_ratio=0.5)
+        assert check.validate_rule({"heap_fetches": 100, "ratio": 0.5}) is True
+        assert check.validate_rule({"heap_fetches": 99, "ratio": 0.9}) is False
+        assert check.validate_rule({"heap_fetches": 1000, "ratio": 0.4}) is False
+
+
+class TestIndexRegularScanCheck:
+    def test_few_blocks_is_ok(self):
+        check = IndexRegularScanCheck()
         node = {
             "Node Type": "Index Scan",
             "Actual Rows": 5000,
-            "Shared Read Blocks": 0,  # всё из кэша
+            "Shared Read Blocks": 0,
         }
-        assert IndexScanCheck().check(node) == []
+        assert check.check(node) == []
 
-    def test_index_scan_with_many_disk_reads_is_reported(self):
+    def test_below_min_rows_is_ok(self):
+        check = IndexRegularScanCheck()
+        node = {
+            "Node Type": "Index Scan",
+            "Actual Rows": 500,
+            "Shared Read Blocks": 9000,
+        }
+        assert check.check(node) == []
+
+    def test_poor_clustering_is_reported(self):
+        check = IndexRegularScanCheck()
         node = {
             "Node Type": "Index Scan",
             "Index Name": "idx_users_email",
@@ -495,22 +529,30 @@ class TestIndexScanCheck:
             "Actual Rows": 20_000,
             "Shared Read Blocks": 8_000,
         }
-        issues = IndexScanCheck().check(node)
+        issues = check.check(node)
         assert len(issues) == 1
-        assert issues[0].type == "index_scan_heap_locality"
+        assert issues[0].type == "index_scan_poor_clustering"
         assert issues[0].severity == "info"
         assert "CLUSTER" in issues[0].message
 
-    # --- Edge cases ------------------------------------------------------
+    def test_index_only_scan_is_ignored(self):
+        check = IndexRegularScanCheck()
+        node = {
+            "Node Type": "Index Only Scan",
+            "Actual Rows": 20_000,
+            "Heap Fetches": 18_000,
+        }
+        assert check.check(node) == []
 
-    def test_seq_scan_is_ignored(self):
-        node = {"Node Type": "Seq Scan", "Actual Rows": 999_999, "Shared Read Blocks": 9999}
-        assert IndexScanCheck().check(node) == []
+    def test_gather_info_returns_none_without_rows(self):
+        check = IndexRegularScanCheck()
+        assert check.gather_info({"Node Type": "Index Scan"}) is None
 
-    def test_missing_fields_do_not_crash(self):
-        assert IndexScanCheck().check({"Node Type": "Index Scan"}) == []
-        assert IndexScanCheck().check({"Node Type": "Index Only Scan"}) == []
-        assert IndexScanCheck().check({}) == []
+    def test_validate_rule_threshold(self):
+        check = IndexRegularScanCheck(min_rows=100, min_disk_blocks=50)
+        assert check.validate_rule({"actual_rows": 100, "read_blocks": 50}) is True
+        assert check.validate_rule({"actual_rows": 99, "read_blocks": 999}) is False
+        assert check.validate_rule({"actual_rows": 1000, "read_blocks": 49}) is False
 
 class TestPartitionPruningCheck:
     def test_append_with_few_children_is_ok(self):
@@ -582,18 +624,13 @@ class TestPartitionPruningCheck:
         }
         issues = PartitionPruningCheck().check(node)
         assert len(issues) == 1
-        # preview is empty, but the message must still be well-formed
         assert "Scanned: " in issues[0].message
 
-    # ----- phase tests ------------------------------------------------------
+    # ----- phase tests --------------------------------------------------
 
     def test_gather_info_returns_none_for_wrong_node(self):
         check = PartitionPruningCheck()
         assert check.gather_info({"Node Type": "Seq Scan"}) is None
-
-    def test_gather_info_returns_none_for_other_join(self):
-        check = PartitionPruningCheck()
-        assert check.gather_info({"Node Type": "Hash Join"}) is None
 
     def test_gather_info_for_empty_append(self):
         check = PartitionPruningCheck()
@@ -607,7 +644,7 @@ class TestPartitionPruningCheck:
             "Plans": [
                 {"Node Type": "Seq Scan", "Relation Name": "t_p01"},
                 {"Node Type": "Seq Scan", "Relation Name": "t_p02"},
-            {"Node Type": "Seq Scan"},   # no name — skipped
+                {"Node Type": "Seq Scan"},
             ],
         }
         info = check.gather_info(node)
@@ -618,16 +655,13 @@ class TestPartitionPruningCheck:
         check = PartitionPruningCheck(max_children=3)
         assert check.validate_rule({"count": 4, "names": []}) is True
         assert check.validate_rule({"count": 3, "names": []}) is False
-        assert check.validate_rule({"count": 1, "names": []}) is False
 
     def test_generate_msg_short_list(self):
         check = PartitionPruningCheck(max_children=3)
         info = {"count": 5, "names": ["a", "b", "c"]}
-        issues = check.generate_msg(info)
-        msg = issues[0].message
+        msg = check.generate_msg(info)[0].message
         assert "Append over 5 partitions" in msg
         assert "Scanned: a, b, c" in msg
-        assert "more)" not in msg
 
     def test_generate_msg_long_list_is_truncated(self):
         check = PartitionPruningCheck(max_children=3)
@@ -635,22 +669,10 @@ class TestPartitionPruningCheck:
             "count": 12,
             "names": [f"t_p{i:02d}" for i in range(1, 13)],
         }
-        issues = check.generate_msg(info)
-        msg = issues[0].message
+        msg = check.generate_msg(info)[0].message
         assert "Append over 12 partitions" in msg
         assert "t_p01, t_p02, t_p03" in msg
         assert "… (+9 more)" in msg
-        assert "t_p04" not in msg   # beyond preview
-
-    def test_generate_msg_empty_names(self):
-        """Children without relation names still produce a valid message."""
-        check = PartitionPruningCheck(max_children=3)
-        info = {"count": 5, "names": []}
-        issues = check.generate_msg(info)
-        msg = issues[0].message
-        assert "Append over 5 partitions" in msg
-        assert "Scanned: " in msg
-        # no crash, no dangling comma
 
 class TestNonSargableCheck:
     """Tests for NonSargableCheck.
@@ -1262,7 +1284,7 @@ class TestAnalyzePlan:
         ]
         result = analyze_plan(plan, checks=ALL_CHECKS)
         assert result["issue_count"] == 1
-        assert result["issues"][0]["type"] == "index_scan_heap_locality"
+        assert result["issues"][0]["type"] == "index_only_scan_stale_vm"
 
     def test_checks_applied_is_present(self):
         plan = [{

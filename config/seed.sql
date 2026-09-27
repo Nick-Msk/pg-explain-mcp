@@ -12,6 +12,8 @@ insert into tags (name) values
     ('INDEX'),
     ('SORT'),
     ('JOIN'),
+    ('ESTIMATE'),
+    ('SCAN'),
     ('HASH');
 
 insert into checks (num, database, name, description, enabled) values
@@ -21,26 +23,35 @@ insert into checks (num, database, name, description, enabled) values
     (4,  'postgres', 'DiskSpillHashCheck',    'hash operation using multiple batches',                  1),
     (5,  'postgres', 'NestedLoopCheck',       'Nested Loop with many inner iterations',                 1),
     (6,  'postgres', 'BitmapHeapScanCheck',   'large Bitmap Heap Scan',                                 1),
-    (7,  'postgres', 'IndexRegularScanCheck', 'index scan reading too many blocks for rows returned',   0),
-    (8,  'postgres', 'IndexOnlyScanCheck',    'index only scan with stale visibility map',              0),
+    (7,  'postgres', 'IndexRegularScanCheck', 'index scan reading too many blocks for rows returned',   1),
+    (8,  'postgres', 'IndexOnlyScanCheck',    'index only scan with stale visibility map',              1),
     (9,  'postgres', 'PartitionPruningCheck', 'Append over many partitions — pruning may have failed',  1),
     (10, 'postgres', 'NonSargableCheck',      'non-sargable predicate on an indexed column',            1);
 
 insert into checks_tags (num, database, tag) values
-    (1,  'postgres', 'GENERAL'),
-    (2,  'postgres', 'GENERAL'),
+    -- Scans
+    (1,  'postgres', 'SCAN'),        -- SeqScanCheck
+    (6,  'postgres', 'SCAN'),        -- BitmapHeapScanCheck
+
+    -- Sort / hash spills
     (3,  'postgres', 'SPILL'),
     (3,  'postgres', 'SORT'),
     (4,  'postgres', 'SPILL'),
     (4,  'postgres', 'HASH'),
-    (5,  'postgres', 'JOIN'),
-    (6,  'postgres', 'GENERAL'),
-    (7,  'postgres', 'GENERAL'),
-    (7,  'postgres', 'INDEX'),
-    (8,  'postgres', 'GENERAL'),
-    (8,  'postgres', 'INDEX'),
-    (9,  'postgres', 'GENERAL'),
-    (10, 'postgres', 'GENERAL');
+
+    -- Joins
+    (5,  'postgres', 'JOIN'),        -- NestedLoopCheck
+
+    -- Index usability
+    (7,  'postgres', 'INDEX'),       -- IndexRegularScanCheck
+    (8,  'postgres', 'INDEX'),       -- IndexOnlyScanCheck
+    (10, 'postgres', 'INDEX'),       -- NonSargableCheck
+
+    -- Planner estimation
+    (2,  'postgres', 'ESTIMATE'),    -- EstimateMismatchCheck
+
+    -- Partitioning
+    (9,  'postgres', 'PARTITION');   -- PartitionPruningCheck
 
 insert into check_params (num, database, param, value, default_value) values
     (1, 'postgres', 'threshold_rows',    '1000',   '1000'),

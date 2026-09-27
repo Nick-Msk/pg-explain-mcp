@@ -11,7 +11,8 @@ from pg_explain_mcp.analyzer import (
     DiskSpillHashCheck,
     DiskSpillSortCheck,
     EstimateMismatchCheck,
-    IndexScanCheck,
+    IndexOnlyScanCheck,
+    IndexRegularScanCheck,
     NestedLoopCheck,
     NonSargableCheck,
     PartitionPruningCheck,
@@ -46,10 +47,13 @@ _REGISTRY: dict[str, tuple[type, dict[str, Callable[[str], Any]]]] = {
     "BitmapHeapScanCheck": (BitmapHeapScanCheck, {
         "threshold_rows": int,
     }),
-    "IndexScanCheck": (IndexScanCheck, {
+    "IndexRegularScanCheck": (IndexRegularScanCheck, {
+        "min_rows":         int,
+        "min_disk_blocks":  int,
+    }),
+    "IndexOnlyScanCheck": (IndexOnlyScanCheck, {
         "min_rows":         int,
         "heap_fetch_ratio": float,
-        "min_disk_blocks":  int,
     }),
         "PartitionPruningCheck": (PartitionPruningCheck, {
         "max_children": int,
