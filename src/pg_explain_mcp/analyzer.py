@@ -1015,6 +1015,126 @@ def _make_summary(issues: list[Issue], exec_time: float) -> str:
         f"Execution time: {exec_time:.2f} ms."
     )
 
+def _parse_plan_impl(
+    plan_json: list[dict[str, Any]],
+    *,
+    compact: bool,
+) -> list[dict[str, Any]]:
+    """Shared parser implementation.
+
+    ``compact=True`` drops numeric fields whose value is exactly zero.
+    Booleans, empty lists, and nulls are kept — they carry meaning.
+    """
+    if not plan_json:
+        return []
+
+    root = plan_json[0].get("Plan", {})
+    nodes: list[dict[str, Any]] = []
+
+    def _is_zero(value: Any) -> bool:
+        return isinstance(value, (int, float)) and not isinstance(value, bool) and value == 0
+
+    def visit(node, parent_id, depth):
+        node_id = len(nodes)
+        entry: dict[str, Any] = {
+            "id": node_id,
+            "parent_id": parent_id,
+            "depth": depth,
+            "children_ids": [],
+        }
+        for key, value in node.items():
+            if key == "Plans":
+                continue
+            if compact and _is_zero(value):
+                continue
+            entry[key] = value
+        nodes.append(entry)
+
+        for child in node.get("Plans", []):
+            child_id = visit(child, node_id, depth + 1)
+            entry["children_ids"].append(child_id)
+
+        return node_id
+
+    visit(root, None, 0)
+    return nodes
+
+def parse_plan(plan_json: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Parse an EXPLAIN (FORMAT JSON) plan into a flat, navigable tree.
+
+    Every field from the original JSON is preserved, including numeric
+    zeros. Use this when you need the raw, faithful representation —
+    for example, when diffing plans or inspecting individual block
+    counters.
+
+    Use ``filtered_parse_plan`` when the output is going to a human or
+    an LLM and zero-noise is undesirable.
+    """
+    return _parse_plan_impl(plan_json, compact=False)
+
+
+def filtered_parse_plan(plan_json: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Same as ``parse_plan``, but drops zero-valued numeric fields.
+
+    PostgreSQL's JSON output always includes every field, even when
+    empty. On a two-node plan that is roughly thirty fields per node,
+    most of them ``0``. Filtering brings the payload down to the
+    fields that actually carry signal.
+
+    Kept regardless of value:
+
+    - booleans (``false`` is meaningful: ``Parallel Aware: false``),
+    - empty lists (``children_ids: []`` — structural),
+    - nulls (``parent_id: null`` for the root).
+
+    Dropped: integers and floats equal to exactly zero.
+    """
+    return _parse_plan_impl(plan_json, compact=True)
+
+
+_STRUCTURAL_KEYS = frozenset(
+    {"id", "parent_id", "depth", "children_ids", "Node Type"}
+)
+
+
+def format_plan_tree(nodes: list[dict[str, Any]]) -> str:
+    """Render a parsed plan tree as indented text.
+
+    Format:
+
+        Limit
+          Plan Rows: 100000
+          Actual Rows: 100000
+          Actual Loops: 1
+          Index Scan
+            Plan Rows: 1000000
+            Relation Name: data_index_scan_norm
+            ...
+
+    Each node starts with its ``Node Type`` on its own line; its
+    fields follow, indented by two spaces; each child is rendered
+    indented by two more spaces per depth level.
+    """
+    if not nodes:
+        return "(empty plan)"
+
+    by_id = {n["id"]: n for n in nodes}
+    lines: list[str] = []
+
+    def render(node_id: int) -> None:
+        node = by_id[node_id]
+        base = "  " * node["depth"]
+        lines.append(f"{base}{node['Node Type']}")
+        for key, value in node.items():
+            if key in _STRUCTURAL_KEYS:
+                continue
+            lines.append(f"{base}  {key}: {value}")
+        for child_id in node["children_ids"]:
+            render(child_id)
+
+    render(0)
+    return "\n".join(lines)
+
 def summarize_plan_node(
     node: dict[str, Any],
     fields: dict[str, str],

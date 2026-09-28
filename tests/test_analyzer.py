@@ -12,6 +12,9 @@ from pg_explain_mcp.analyzer import (
     PartitionPruningCheck,
     SeqScanCheck,
     analyze_plan,
+    filtered_parse_plan,
+    format_plan_tree,
+    parse_plan,
     summarize_plan_node,
 )
 from pg_explain_mcp.server import _format_indexes, _format_params
@@ -1417,4 +1420,183 @@ class TestFormatIndexes:
             "plain_columns": ["status", "created_at"],
         }]
         assert "status, created_at" in _format_indexes(rows)
+
+class TestParsePlan:
+    def test_empty(self):
+        assert parse_plan([]) == []
+
+    def test_single_node(self):
+        plan = [{
+            "Plan": {
+                "Node Type": "Limit",
+                "Plan Rows": 100,
+                "Actual Rows": 100,
+            }
+        }]
+        nodes = parse_plan(plan)
+        assert len(nodes) == 1
+        n = nodes[0]
+        assert n["id"] == 0
+        assert n["parent_id"] is None
+        assert n["depth"] == 0
+        assert n["children_ids"] == []
+        assert n["Node Type"] == "Limit"
+        assert n["Plan Rows"] == 100
+        assert n["Actual Rows"] == 100
+
+    def test_two_levels(self):
+        plan = [{
+            "Plan": {
+                "Node Type": "Limit",
+                "Plans": [
+                    {"Node Type": "Index Scan", "Relation Name": "t"},
+                ],
+            }
+        }]
+        nodes = parse_plan(plan)
+        assert len(nodes) == 2
+        assert nodes[0]["children_ids"] == [1]
+        assert nodes[1]["parent_id"] == 0
+        assert nodes[1]["depth"] == 1
+
+    def test_preorder_traversal(self):
+        plan = [{
+            "Plan": {
+                "Node Type": "A",
+                "Plans": [
+                    {"Node Type": "B", "Plans": [{"Node Type": "D"}]},
+                    {"Node Type": "C"},
+                ],
+            }
+        }]
+        nodes = parse_plan(plan)
+        assert [n["Node Type"] for n in nodes] == ["A", "B", "D", "C"]
+        assert nodes[0]["children_ids"] == [1, 3]
+        assert nodes[1]["children_ids"] == [2]
+
+    def test_plans_field_not_preserved(self):
+        plan = [{"Plan": {"Node Type": "X", "Plans": [{"Node Type": "Y"}]}}]
+        nodes = parse_plan(plan)
+        assert "Plans" not in nodes[0]
+        assert "Plans" not in nodes[1]
+
+    def test_all_fields_preserved(self):
+        plan = [{
+            "Plan": {
+                "Node Type": "Index Scan",
+                "Relation Name": "t",
+                "Index Name": "idx_t",
+                "Startup Cost": 0.42,
+                "Total Cost": 100.5,
+                "Actual Loops": 1,
+                "Shared Read Blocks": 42,
+                "Custom Field": "custom",
+            }
+        }]
+        n = parse_plan(plan)[0]
+        assert n["Relation Name"] == "t"
+        assert n["Index Name"] == "idx_t"
+        assert n["Startup Cost"] == 0.42
+        assert n["Total Cost"] == 100.5
+        assert n["Shared Read Blocks"] == 42
+        assert n["Custom Field"] == "custom"
+
+
+class TestFormatPlanTree:
+    def test_empty(self):
+        assert format_plan_tree([]) == "(empty plan)"
+
+    def test_single_node(self):
+        nodes = parse_plan([{
+            "Plan": {"Node Type": "Limit", "Plan Rows": 100}
+        }])
+        text = format_plan_tree(nodes)
+        assert "Limit" in text
+        assert "Plan Rows: 100" in text
+
+    def test_child_is_indented(self):
+        nodes = parse_plan([{
+            "Plan": {
+                "Node Type": "Limit",
+                "Plan Rows": 100,
+                "Plans": [{"Node Type": "Index Scan", "Plan Rows": 500}],
+            }
+        }])
+        text = format_plan_tree(nodes)
+        lines = text.split("\n")
+        assert lines[0] == "Limit"
+        child = next(line for line in lines if "Index Scan" in line)
+        assert child.startswith("  ")
+
+    def test_structural_fields_not_printed(self):
+        nodes = parse_plan([{
+            "Plan": {"Node Type": "Limit", "Plan Rows": 100}
+        }])
+        text = format_plan_tree(nodes)
+        assert "id:" not in text
+        assert "parent_id:" not in text
+        assert "depth:" not in text
+        assert "children_ids:" not in text
+    def test_parse_plan_keeps_zeros(self):
+        """parse_plan is honest — zero fields stay."""
+        plan = [{"Plan": {
+            "Node Type": "Limit",
+            "Actual Rows": 10,
+            "Shared Read Blocks": 0,
+            "Temp Read Blocks": 0,
+        }}]
+        node = parse_plan(plan)[0]
+        assert node["Shared Read Blocks"] == 0
+        assert node["Temp Read Blocks"] == 0
+
+
+class TestFilteredParsePlan:
+    def test_drops_zero_numeric(self):
+        plan = [{"Plan": {
+            "Node Type": "Limit",
+            "Actual Rows": 10,
+            "Shared Read Blocks": 0,
+            "Shared Hit Blocks": 5,
+        }}]
+        node = filtered_parse_plan(plan)[0]
+        assert "Shared Read Blocks" not in node
+        assert node["Shared Hit Blocks"] == 5
+
+    def test_keeps_booleans(self):
+        plan = [{"Plan": {
+            "Node Type": "Limit",
+            "Parallel Aware": False,
+            "Async Capable": False,
+        }}]
+        node = filtered_parse_plan(plan)[0]
+        assert node["Parallel Aware"] is False
+        assert node["Async Capable"] is False
+
+    def test_keeps_empty_children_ids(self):
+        plan = [{"Plan": {"Node Type": "Index Scan"}}]
+        node = filtered_parse_plan(plan)[0]
+        assert node["children_ids"] == []
+
+    def test_keeps_parent_id_null(self):
+        plan = [{"Plan": {"Node Type": "Limit"}}]
+        node = filtered_parse_plan(plan)[0]
+        assert node["parent_id"] is None
+
+    def test_does_not_drop_false_like_zero(self):
+        """False is not a numeric zero — must survive."""
+        plan = [{"Plan": {"Node Type": "Limit", "Disabled": False}}]
+        node = filtered_parse_plan(plan)[0]
+        assert node["Disabled"] is False
+
+    def test_structural_fields_always_present(self):
+        plan = [{"Plan": {
+            "Node Type": "Index Scan",
+            "Actual Rows": 0,   # dropped as zero
+        }}]
+        node = filtered_parse_plan(plan)[0]
+        # structural fields are added after filtering — always there
+        assert node["id"] == 0
+        assert node["depth"] == 0
+        assert "children_ids" in node
+        assert "parent_id" in node
 

@@ -28,6 +28,6 @@ ALL_CHECKS = (
     IndexRegularScanCheck(),
     IndexOnlyScanCheck(),
     PartitionPruningCheck(),
-    NonSargableCheck()   # no relation_indexes — won't fire, fine for integration tests
+    NonSargableCheck(),   # no relation_indexes — won't fire, fine for integration tests
 )
 

@@ -5,7 +5,12 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from pg_explain_mcp.analyzer import analyze_plan, summarize_plan_node
+from pg_explain_mcp.analyzer import (
+    analyze_plan,
+    filtered_parse_plan,
+    format_plan_tree,
+    summarize_plan_node,
+)
 from pg_explain_mcp.config import (
     DEFAULT_DB,
     CheckRegistry,
@@ -174,6 +179,57 @@ def explain(sql: str) -> str:
         report["plan_nodes"] = summarize_plan_node(plan_tree, fields)
 
         return json.dumps(report, indent=2, ensure_ascii=False)
+    except ValueError as e:
+        return f"Validation error: {e}"
+    except Exception as e:
+        return f"Execution error: {e}"
+
+@mcp.tool()
+def explain_tree(sql: str) -> str:
+    """Run EXPLAIN ANALYZE and return the full plan as a navigable tree.
+
+    Unlike ``explain``, which returns a curated ``plan_nodes`` list,
+    this tool returns **every** field from the JSON plan, plus four
+    structural fields for navigation:
+
+    - ``id``           — unique node id (pre-order)
+    - ``parent_id``    — id of the parent, ``null`` for the root
+    - ``depth``        — 0 for the root, +1 per level
+    - ``children_ids`` — ids of direct children
+
+    Nodes are ordered pre-order: ``nodes[0]`` is always the root.
+    Navigate top-down via ``children_ids``, bottom-up via ``parent_id``.
+
+    Args:
+        sql: A SQL query. Only SELECT and WITH statements are allowed.
+    """
+    try:
+        raw = explain_query(sql, analyze=True, buffers=True)
+        plan_json = raw["QUERY PLAN"]
+        nodes = filtered_parse_plan(plan_json)
+        return json.dumps(nodes, indent=2, ensure_ascii=False)
+    except ValueError as e:
+        return f"Validation error: {e}"
+    except Exception as e:
+        return f"Execution error: {e}"
+
+
+@mcp.tool()
+def explain_tree_text(sql: str) -> str:
+    """Run EXPLAIN ANALYZE and return the plan tree as indented text.
+
+    Same data as ``explain_tree``, rendered for human reading. Each
+    node starts with its ``Node Type``; its fields follow, indented by
+    two spaces; children are indented two more spaces per depth.
+
+    Args:
+        sql: A SQL query. Only SELECT and WITH statements are allowed.
+    """
+    try:
+        raw = explain_query(sql, analyze=True, buffers=True)
+        plan_json = raw["QUERY PLAN"]
+        nodes = filtered_parse_plan(plan_json)
+        return format_plan_tree(nodes)
     except ValueError as e:
         return f"Validation error: {e}"
     except Exception as e:
