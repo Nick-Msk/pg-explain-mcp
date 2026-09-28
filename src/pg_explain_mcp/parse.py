@@ -2,18 +2,19 @@
 
 Usage:
 
-    # Run EXPLAIN on a query
+    # SQL as argument
     pg-explain-parse "select * from t limit 10"
 
-    # Plan only — do not execute the query
-    pg-explain-parse --no-analyze "select * from t"
+    # SQL from a file — if the argument names an existing file, it is
+    # read as SQL. Otherwise the string itself is treated as SQL.
+    pg-explain-parse query.sql
 
-    # JSON output
-    pg-explain-parse --json "select * from t"
+    # SQL from stdin — pipe anything in
+    cat query.sql | pg-explain-parse
 
-    # Parse a saved JSON plan instead of running a query
-    pg-explain-parse -f plan.json
-    psql -tA -c "explain (format json) select 1" | pg-explain-parse -f -
+    # Parse a saved plan JSON instead
+    pg-explain-parse --plan plan.json
+    cat plan.json | pg-explain-parse --plan -
 
 Connection parameters are read from the same environment variables
 as the MCP server: PG_HOST, PG_PORT, PG_USER, PG_PASSWORD, PG_DATABASE.
@@ -22,6 +23,7 @@ as the MCP server: PG_HOST, PG_PORT, PG_USER, PG_PASSWORD, PG_DATABASE.
 import argparse
 import json
 import sys
+from pathlib import Path
 
 from pg_explain_mcp.analyzer import (
     filtered_parse_plan,
@@ -31,16 +33,34 @@ from pg_explain_mcp.analyzer import (
 from pg_explain_mcp.db import explain_query
 
 
-def _read_json_file(path: str) -> str:
-    """Read plan JSON from a file, or from stdin if ``path`` is ``-``."""
+def _read_file(path: str) -> str:
+    """Read a file, or stdin if ``path`` is ``-``."""
     if path == "-":
         return sys.stdin.read()
-    with open(path) as f:
-        return f.read()
+    return Path(path).read_text()
+
+
+def _resolve_sql(arg: str | None) -> str | None:
+    """Resolve the SQL query from argument, file, or stdin.
+
+    Order of preference:
+
+    1. If ``arg`` is given and points to an existing file, read it.
+    2. If ``arg`` is given (and is not a file), treat it as SQL text.
+    3. If nothing is passed and stdin is not a TTY, read from stdin.
+    4. Otherwise return ``None`` — caller reports an error.
+    """
+    if arg:
+        p = Path(arg)
+        if p.is_file():
+            return p.read_text()
+        return arg
+    if not sys.stdin.isatty():
+        return sys.stdin.read()
+    return None
 
 
 def _emit(nodes: list[dict], as_json: bool) -> None:
-    """Print the parsed nodes as JSON or indented text."""
     if as_json:
         print(json.dumps(nodes, indent=2, ensure_ascii=False))
     else:
@@ -56,16 +76,19 @@ def main() -> int:
         ),
     )
     parser.add_argument(
-        "sql",
+        "sql_or_file",
         nargs="?",
-        help="SQL query to EXPLAIN. Mutually exclusive with --file.",
+        help=(
+            "SQL text, or path to a file containing SQL. If omitted, "
+            "SQL is read from stdin."
+        ),
     )
     parser.add_argument(
-        "-f", "--file",
+        "--plan",
         metavar="PATH",
         help=(
-            "Read plan JSON from a file instead of running a query. "
-            "Use '-' to read from stdin."
+            "Parse a saved EXPLAIN (FORMAT JSON) plan instead of "
+            "running a query. Use '-' to read from stdin."
         ),
     )
     parser.add_argument(
@@ -96,22 +119,20 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    if args.sql and args.file:
+    if args.sql_or_file and args.plan:
         print(
-            "error: provide either a SQL query or --file, not both",
-            file=sys.stderr,
-        )
-        return 2
-    if not args.sql and not args.file:
-        print(
-            "error: provide a SQL query or --file PATH",
+            "error: provide either SQL (positional) or --plan, not both",
             file=sys.stderr,
         )
         return 2
 
-    # --- mode 1: parse a saved JSON plan ----------------------------
-    if args.file:
-        raw = _read_json_file(args.file).strip()
+    # --- mode 1: parse a saved plan JSON ----------------------------
+    if args.plan:
+        try:
+            raw = _read_file(args.plan).strip()
+        except OSError as e:
+            print(f"error: cannot read {args.plan}: {e}", file=sys.stderr)
+            return 1
         if not raw:
             print("error: empty input", file=sys.stderr)
             return 2
@@ -121,18 +142,27 @@ def main() -> int:
             print(f"error: input is not valid JSON: {e}", file=sys.stderr)
             return 1
 
-        if args.all_fields:
-            nodes = parse_plan(plan_json)
-        else:
-            nodes = filtered_parse_plan(plan_json)
-
-        _emit(nodes, args.json)
+        parser_fn = parse_plan if args.all_fields else filtered_parse_plan
+        _emit(parser_fn(plan_json), args.json)
         return 0
 
-    # --- mode 2: run EXPLAIN on the given SQL -----------------------
+    # --- mode 2: run EXPLAIN on SQL ---------------------------------
+    sql = _resolve_sql(args.sql_or_file)
+    if sql is None:
+        print(
+            "error: no SQL provided — pass it as an argument, a file "
+            "path, or on stdin",
+            file=sys.stderr,
+        )
+        return 2
+    sql = sql.strip()
+    if not sql:
+        print("error: empty SQL", file=sys.stderr)
+        return 2
+
     try:
         raw = explain_query(
-            args.sql,
+            sql,
             analyze=not args.no_analyze,
             buffers=not args.no_buffers,
         )
@@ -142,18 +172,15 @@ def main() -> int:
     except Exception as e:
         print(f"error: {e}", file=sys.stderr)
         print(
-            "hint: check PG_HOST, PG_PORT, PG_USER, PG_PASSWORD, "
-            "PG_DATABASE",
+            "hint: set the connection environment variables, e.g.\n"
+            "    PG_HOST=127.0.0.1 PG_USER=your_user "
+            "PG_PASSWORD=your_password PG_DATABASE=your_db",
             file=sys.stderr,
         )
         return 1
 
-    if args.all_fields:
-        nodes = parse_plan(raw["QUERY PLAN"])
-    else:
-        nodes = filtered_parse_plan(raw["QUERY PLAN"])
-
-    _emit(nodes, args.json)
+    parser_fn = parse_plan if args.all_fields else filtered_parse_plan
+    _emit(parser_fn(raw["QUERY PLAN"]), args.json)
     return 0
 
 

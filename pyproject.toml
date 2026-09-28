@@ -34,6 +34,7 @@ dev = [
 
 [project.scripts]
 pg-explain-mcp = "pg_explain_mcp.server:main"
+pg-explain-parse = "pg_explain_mcp.parse:main"
 
 [project.urls]
 Homepage = "https://github.com/Nick-Msk/pg-explain-mcp"

@@ -1501,6 +1501,26 @@ class TestParsePlan:
         assert n["Shared Read Blocks"] == 42
         assert n["Custom Field"] == "custom"
 
+    def test_depth_increases_with_nesting(self):
+        """Three levels — depths 0, 1, 2 — are rendered correctly."""
+        nodes = parse_plan([{
+            "Plan": {
+                "Node Type": "Limit",
+                "Plans": [{
+                    "Node Type": "Sort",
+                    "Plans": [{"Node Type": "Seq Scan"}],
+                }],
+            }
+        }])
+        text = format_plan_tree(nodes)
+        lines = text.split("\n")
+        assert "Limit [depth=0]" in lines[0]
+        sort_line = next(line for line in lines if "Sort" in line)
+        seq_line = next(line for line in lines if "Seq Scan" in line)
+        assert sort_line.startswith("  ")
+        assert "[depth=1]" in sort_line
+        assert seq_line.startswith("    ")
+        assert "[depth=2]" in seq_line
 
 class TestFormatPlanTree:
     def test_empty(self):
@@ -1524,9 +1544,9 @@ class TestFormatPlanTree:
         }])
         text = format_plan_tree(nodes)
         lines = text.split("\n")
-        assert lines[0] == "Limit"
-        child = next(line for line in lines if "Index Scan" in line)
-        assert child.startswith("  ")
+        assert lines[0] == "Limit [depth=0]"
+        child_line = next(line for line in lines if "Index Scan" in line)
+        assert child_line == "  Index Scan [depth=1]"
 
     def test_structural_fields_not_printed(self):
         nodes = parse_plan([{

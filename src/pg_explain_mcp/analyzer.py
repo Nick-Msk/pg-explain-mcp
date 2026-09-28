@@ -1124,7 +1124,7 @@ def format_plan_tree(nodes: list[dict[str, Any]]) -> str:
     def render(node_id: int) -> None:
         node = by_id[node_id]
         base = "  " * node["depth"]
-        lines.append(f"{base}{node['Node Type']}")
+        lines.append(f"{base}{node['Node Type']} [depth={node['depth']}]")
         for key, value in node.items():
             if key in _STRUCTURAL_KEYS:
                 continue
