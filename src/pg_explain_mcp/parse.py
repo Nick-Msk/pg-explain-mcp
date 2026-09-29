@@ -69,6 +69,12 @@ def _emit(nodes: list[dict], as_json: bool, marker_tabs: int = 5) -> None:
         print(format_plan_tree(nodes, marker_tabs=marker_tabs))
 
 
+def _parse_with_policy(plan_json: list, all_fields: bool) -> list:
+    if all_fields:
+        return parse_plan(plan_json)
+    policy = _registry.load_field_policy()
+    return filtered_parse_plan(plan_json, field_policy=policy)
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="pg-explain-parse",
@@ -154,13 +160,9 @@ def main() -> int:
             print(f"error: input is not valid JSON: {e}", file=sys.stderr)
             return 1
 
-        if args.all_fields:
-            nodes = parse_plan(plan_json)   # or raw["QUERY PLAN"]
-        else:
-            policy = _registry.load_field_policy()
-            nodes = filtered_parse_plan(plan_json, field_policy=policy)
-
+        nodes = _parse_with_policy(plan_json, args.all_fields)
         _emit(nodes, args.json, args.marker_tabs)
+
         return 0
 
     # --- mode 2: run EXPLAIN on SQL ---------------------------------
@@ -196,8 +198,9 @@ def main() -> int:
         )
         return 1
 
-    parser_fn = parse_plan if args.all_fields else filtered_parse_plan
-    _emit(parser_fn(raw["QUERY PLAN"]), args.json, args.marker_tabs)
+    nodes = _parse_with_policy(raw["QUERY PLAN"], args.all_fields)
+    _emit(nodes, args.json, args.marker_tabs)
+
     return 0
 
 
