@@ -60,11 +60,11 @@ def _resolve_sql(arg: str | None) -> str | None:
     return None
 
 
-def _emit(nodes: list[dict], as_json: bool) -> None:
+def _emit(nodes: list[dict], as_json: bool, marker_tabs: int = 5) -> None:
     if as_json:
         print(json.dumps(nodes, indent=2, ensure_ascii=False))
     else:
-        print(format_plan_tree(nodes))
+        print(format_plan_tree(nodes, marker_tabs=marker_tabs))
 
 
 def main() -> int:
@@ -117,6 +117,16 @@ def main() -> int:
             "dropped for readability."
         ),
     )
+    parser.add_argument(
+        "--marker-tabs",
+        type=int,
+        default=5,
+        metavar="N",
+        help=(
+            "Tab characters between the node type and the [depth:sibling] "
+            "marker. Default: 5."
+        ),
+    )
     args = parser.parse_args()
 
     if args.sql_or_file and args.plan:
@@ -143,7 +153,7 @@ def main() -> int:
             return 1
 
         parser_fn = parse_plan if args.all_fields else filtered_parse_plan
-        _emit(parser_fn(plan_json), args.json)
+        _emit(parser_fn(plan_json), args.json, args.marker_tabs)
         return 0
 
     # --- mode 2: run EXPLAIN on SQL ---------------------------------
@@ -180,7 +190,7 @@ def main() -> int:
         return 1
 
     parser_fn = parse_plan if args.all_fields else filtered_parse_plan
-    _emit(parser_fn(raw["QUERY PLAN"]), args.json)
+    _emit(parser_fn(raw["QUERY PLAN"]), args.json, args.marker_tabs)
     return 0
 
 

@@ -1501,26 +1501,6 @@ class TestParsePlan:
         assert n["Shared Read Blocks"] == 42
         assert n["Custom Field"] == "custom"
 
-    def test_depth_increases_with_nesting(self):
-        """Three levels — depths 0, 1, 2 — are rendered correctly."""
-        nodes = parse_plan([{
-            "Plan": {
-                "Node Type": "Limit",
-                "Plans": [{
-                    "Node Type": "Sort",
-                    "Plans": [{"Node Type": "Seq Scan"}],
-                }],
-            }
-        }])
-        text = format_plan_tree(nodes)
-        lines = text.split("\n")
-        assert "Limit [depth=0] [path=0:0]" in lines[0]
-        sort_line = next(line for line in lines if "Sort" in line)
-        seq_line = next(line for line in lines if "Seq Scan" in line)
-        assert sort_line.startswith("  ")
-        assert "[depth=1]" in sort_line
-        assert seq_line.startswith("    ")
-        assert "[depth=2]" in seq_line
     def test_root_path(self):
         plan = [{"Plan": {"Node Type": "Limit"}}]
         assert parse_plan(plan)[0]["path"] == "0:0"
@@ -1551,10 +1531,9 @@ class TestFormatPlanTree:
         nodes = parse_plan([{
             "Plan": {"Node Type": "Limit", "Plan Rows": 100}
         }])
-        text = format_plan_tree(nodes)
-        assert "Limit" in text
-        assert "[depth=0]" in text
-        assert "[path=0:0]" in text
+        text = format_plan_tree(nodes, marker_tabs=1)
+        lines = text.split("\n")
+        assert lines[0] == "Limit\t[0:0]"
         assert "Plan Rows: 100" in text
 
     def test_child_is_indented(self):
@@ -1565,11 +1544,11 @@ class TestFormatPlanTree:
                 "Plans": [{"Node Type": "Index Scan", "Plan Rows": 500}],
             }
         }])
-        text = format_plan_tree(nodes)
+        text = format_plan_tree(nodes, marker_tabs=1)
         lines = text.split("\n")
-        assert lines[0] == "Limit [depth=0] [path=0:0]"
+        assert lines[0] == "Limit\t[0:0]"
         child_line = next(line for line in lines if "Index Scan" in line)
-        assert child_line == "  Index Scan [depth=1] [path=0:0/1:0]"
+        assert child_line == "  Index Scan\t[1:0]"
 
     def test_structural_fields_not_printed(self):
         nodes = parse_plan([{
@@ -1580,6 +1559,23 @@ class TestFormatPlanTree:
         assert "parent_id:" not in text
         assert "depth:" not in text
         assert "children_ids:" not in text
+
+    def test_siblings_are_distinguished(self):
+        nodes = parse_plan([{
+            "Plan": {
+                "Node Type": "Hash Join",
+                "Plans": [
+                    {"Node Type": "Seq Scan"},
+                    {"Node Type": "Seq Scan"},
+                ],
+            }
+        }])
+        text = format_plan_tree(nodes, marker_tabs=1)
+        lines = text.split("\n")
+        seq_lines = [line for line in lines if "Seq Scan" in line]
+        assert seq_lines[0] == "  Seq Scan\t[1:0]"
+        assert seq_lines[1] == "  Seq Scan\t[1:1]"
+
     def test_parse_plan_keeps_zeros(self):
         """parse_plan is honest — zero fields stay."""
         plan = [{"Plan": {
@@ -1602,23 +1598,19 @@ class TestFormatPlanTree:
                 }],
             }
         }])
-        text = format_plan_tree(nodes)
+        text = format_plan_tree(nodes, marker_tabs=1)
         lines = text.split("\n")
 
         # Root — depth 0, path 0:0
-        assert lines[0] == "Limit  [depth=0] [path=0:0]"
+        assert lines[0] == "Limit\t[0:0]"
 
         # Sort — child of root, first (and only) sibling
         sort_line = next(line for line in lines if "Sort" in line)
-        assert sort_line.startswith("  ")
-        assert "[depth=1]" in sort_line
-        assert "[path=0:0/1:0]" in sort_line
+        assert sort_line == "  Sort\t[1:0]"
 
         # Seq Scan — grandchild, first (and only) sibling
         scan_line = next(line for line in lines if "Seq Scan" in line)
-        assert scan_line.startswith("    ")
-        assert "[depth=2]" in scan_line
-        assert "[path=0:0/1:0/2:0]" in scan_line
+        assert scan_line == "    Seq Scan\t[2:0]"
 
 class TestFilteredParsePlan:
     def test_drops_zero_numeric(self):

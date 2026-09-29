@@ -1106,39 +1106,39 @@ _STRUCTURAL_KEYS = frozenset(
     {"id", "parent_id", "depth", "path", "children_ids", "Node Type"}
 )
 
-
-def format_plan_tree(nodes: list[dict[str, Any]]) -> str:
+def format_plan_tree(
+    nodes: list[dict[str, Any]],
+    marker_tabs: int = 5,
+) -> str:
     """Render a parsed plan tree as indented text.
 
     Format:
 
-        Limit
-          Plan Rows: 100000
-          Actual Rows: 100000
-          Actual Loops: 1
-          Index Scan
-            Plan Rows: 1000000
-            Relation Name: data_index_scan_norm
-            ...
+        Limit             [0:0]
+          Plan Rows: 1000
+          Actual Rows: 1000.0
+          Index Scan      [1:0]
+            Index Name: idx_...
+            Relation Name: t
 
-    Each node starts with its ``Node Type`` on its own line; its
-    fields follow, indented by two spaces; each child is rendered
-    indented by two more spaces per depth level.
+    Args:
+        nodes: flat node list from ``parse_plan``.
+        marker_tabs: number of tab characters between the node type and
+            the ``[depth:sibling]`` marker. Increase for wider
+            terminals or when node names are long.
     """
     if not nodes:
         return "(empty plan)"
 
     by_id = {n["id"]: n for n in nodes}
+    pad = "\t" * marker_tabs
     lines: list[str] = []
 
     def render(node_id: int) -> None:
         node = by_id[node_id]
         base = "  " * node["depth"]
-        lines.append(
-            f"{base}{node['Node Type']} "
-            f" [depth={node['depth']}]"
-            f" [path={node['path']}]"
-        )
+        marker = node["path"].rsplit("/", 1)[-1]
+        lines.append(f"{base}{node['Node Type']}{pad}[{marker}]")
         for key, value in node.items():
             if key in _STRUCTURAL_KEYS:
                 continue
