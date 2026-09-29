@@ -52,7 +52,8 @@ create table if not exists plan_fields (
     database    text    not null,
     raw         text    not null,
     key         text    not null,
-    enabled     integer not null default 1,
+    enabled     integer not null default 999
+                check (enabled in (0, 1, 999)),
     primary key (database, raw),
     foreign key (database) references databases (database)
         on delete cascade

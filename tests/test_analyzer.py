@@ -1662,3 +1662,41 @@ class TestFilteredParsePlan:
         assert "children_ids" in node
         assert "parent_id" in node
 
+    def test_policy_mode_zero_hides_field(self):
+        plan = [{"Plan": {
+            "Node Type": "Limit",
+            "Parallel Aware": True,   # even True is hidden
+            "Actual Rows": 10,
+        }}]
+        node = filtered_parse_plan(plan, field_policy={"Parallel Aware": 0})[0]
+        assert "Parallel Aware" not in node
+        assert node["Actual Rows"] == 10
+
+    def test_policy_mode_one_keeps_zero(self):
+        plan = [{"Plan": {
+            "Node Type": "Index Only Scan",
+            "Heap Fetches": 0,
+            "Shared Read Blocks": 0,
+        }}]
+        policy = {"Heap Fetches": 1, "Shared Read Blocks": 1}
+        node = filtered_parse_plan(plan, field_policy=policy)[0]
+        assert node["Heap Fetches"] == 0
+        assert node["Shared Read Blocks"] == 0
+
+    def test_policy_mode_999_drops_zero(self):
+        plan = [{"Plan": {
+            "Node Type": "Limit",
+            "Sort Space Used": 0,
+            "Sort Space Used Other": 5,   # sanity: non-zero kept
+        }}]
+        node = filtered_parse_plan(plan, field_policy={"Sort Space Used": 999})[0]
+        assert "Sort Space Used" not in node
+        assert node["Sort Space Used Other"] == 5
+
+    def test_unknown_field_defaults_to_999(self):
+        """Fields not in the policy are treated as mode 999."""
+        plan = [{"Plan": {"Node Type": "X", "Mystery": 0, "Known": 0}}]
+        node = filtered_parse_plan(plan, field_policy={"Known": 1})[0]
+        assert "Mystery" not in node      # 999 → dropped
+        assert node["Known"] == 0          # 1 → kept
+

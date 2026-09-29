@@ -30,8 +30,10 @@ from pg_explain_mcp.analyzer import (
     format_plan_tree,
     parse_plan,
 )
+from pg_explain_mcp.config import DEFAULT_DB, CheckRegistry
 from pg_explain_mcp.db import explain_query
 
+_registry = CheckRegistry(DEFAULT_DB)
 
 def _read_file(path: str) -> str:
     """Read a file, or stdin if ``path`` is ``-``."""
@@ -152,8 +154,13 @@ def main() -> int:
             print(f"error: input is not valid JSON: {e}", file=sys.stderr)
             return 1
 
-        parser_fn = parse_plan if args.all_fields else filtered_parse_plan
-        _emit(parser_fn(plan_json), args.json, args.marker_tabs)
+        if args.all_fields:
+            nodes = parse_plan(plan_json)   # or raw["QUERY PLAN"]
+        else:
+            policy = _registry.load_field_policy()
+            nodes = filtered_parse_plan(plan_json, field_policy=policy)
+
+        _emit(nodes, args.json, args.marker_tabs)
         return 0
 
     # --- mode 2: run EXPLAIN on SQL ---------------------------------

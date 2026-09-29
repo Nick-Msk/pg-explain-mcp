@@ -338,7 +338,8 @@ def explain_tree(sql: str) -> str:
     try:
         raw = explain_query(sql, analyze=True, buffers=True)
         plan_json = raw["QUERY PLAN"]
-        nodes = filtered_parse_plan(plan_json)
+        policy = _registry.load_field_policy()
+        nodes = filtered_parse_plan(plan_json, field_policy=policy)
         return json.dumps(nodes, indent=2, ensure_ascii=False)
     except ValueError as e:
         return f"Validation error: {e}"
@@ -360,7 +361,8 @@ def explain_tree_text(sql: str) -> str:
     try:
         raw = explain_query(sql, analyze=True, buffers=True)
         plan_json = raw["QUERY PLAN"]
-        nodes = filtered_parse_plan(plan_json)
+        policy = _registry.load_field_policy()
+        nodes = filtered_parse_plan(plan_json, field_policy=policy)
         return format_plan_tree(nodes)
     except ValueError as e:
         return f"Validation error: {e}"

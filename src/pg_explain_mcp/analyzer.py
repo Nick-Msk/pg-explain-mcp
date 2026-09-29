@@ -1015,32 +1015,39 @@ def _make_summary(issues: list[Issue], exec_time: float) -> str:
         f"Execution time: {exec_time:.2f} ms."
     )
 
+# Field modes used by filtered_parse_plan.
+_FIELD_HIDE = 0          # drop the field entirely
+_FIELD_KEEP_ZEROS = 1    # keep, even when zero
+_FIELD_UNKNOWN = 999     # unknown — keep, but drop numeric zeros
+
+
+def _is_zero(value: Any) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and value == 0
+    )
+
 
 def _parse_plan_impl(
     plan_json: list[dict[str, Any]],
     *,
-    compact: bool,
+    field_policy: dict[str, int] | None,
 ) -> list[dict[str, Any]]:
+    """Shared parser.
+
+    ``field_policy`` maps EXPLAIN field names to a mode
+    (0 / 1 / 999). If ``None``, no filtering — every field is kept
+    verbatim, including zeros.
+    """
     if not plan_json:
         return []
 
+    policy = field_policy
     root = plan_json[0].get("Plan", {})
     nodes: list[dict[str, Any]] = []
 
-    def _is_zero(value: Any) -> bool:
-        return (
-            isinstance(value, (int, float))
-            and not isinstance(value, bool)
-            and value == 0
-        )
-
-    def visit(
-        node: dict[str, Any],
-        parent_id: int | None,
-        depth: int,
-        parent_path: str,
-        sibling_index: int,
-    ) -> int:
+    def visit(node, parent_id, depth, parent_path, sibling_index):
         node_id = len(nodes)
         segment = f"{depth}:{sibling_index}"
         path = f"{parent_path}/{segment}" if parent_path else segment
@@ -1055,8 +1062,12 @@ def _parse_plan_impl(
         for key, value in node.items():
             if key == "Plans":
                 continue
-            if compact and _is_zero(value):
-                continue
+            if policy is not None:
+                mode = policy.get(key, _FIELD_UNKNOWN)
+                if mode == _FIELD_HIDE:
+                    continue
+                if mode != _FIELD_KEEP_ZEROS and _is_zero(value):
+                    continue
             entry[key] = value
         nodes.append(entry)
 
@@ -1069,38 +1080,34 @@ def _parse_plan_impl(
     visit(root, None, 0, "", 0)
     return nodes
 
+
 def parse_plan(plan_json: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Parse an EXPLAIN (FORMAT JSON) plan into a flat, navigable tree.
+    """Parse into a flat tree — every field, verbatim.
 
-    Every field from the original JSON is preserved, including numeric
-    zeros. Use this when you need the raw, faithful representation —
-    for example, when diffing plans or inspecting individual block
-    counters.
-
-    Use ``filtered_parse_plan`` when the output is going to a human or
-    an LLM and zero-noise is undesirable.
+    No filtering: zeros, hidden fields, noise — everything is kept.
+    Use when you need the raw, faithful representation.
     """
-    return _parse_plan_impl(plan_json, compact=False)
+    return _parse_plan_impl(plan_json, field_policy=None)
 
 
-def filtered_parse_plan(plan_json: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Same as ``parse_plan``, but drops zero-valued numeric fields.
+def filtered_parse_plan(
+    plan_json: list[dict[str, Any]],
+    field_policy: dict[str, int] | None = None,
+) -> list[dict[str, Any]]:
+    """Parse into a flat tree, filtering fields by policy.
 
-    PostgreSQL's JSON output always includes every field, even when
-    empty. On a two-node plan that is roughly thirty fields per node,
-    most of them ``0``. Filtering brings the payload down to the
-    fields that actually carry signal.
+    ``field_policy`` maps EXPLAIN field names to a mode:
 
-    Kept regardless of value:
+    - ``0``   — hide the field entirely (noise like ``Parallel
+      Aware`` when false).
+    - ``1``   — keep the field including zero values (``Heap
+      Fetches``, ``Temp Read Blocks`` — a zero there carries signal).
+    - ``999`` — unknown: keep, drop numeric zeros.
 
-    - booleans (``false`` is meaningful: ``Parallel Aware: false``),
-    - empty lists (``children_ids: []`` — structural),
-    - nulls (``parent_id: null`` for the root).
-
-    Dropped: integers and floats equal to exactly zero.
+    Fields not listed default to mode 999. An empty or ``None``
+    policy is equivalent to "keep everything, drop numeric zeros".
     """
-    return _parse_plan_impl(plan_json, compact=True)
-
+    return _parse_plan_impl(plan_json, field_policy=field_policy or {})
 
 _STRUCTURAL_KEYS = frozenset(
     {"id", "parent_id", "depth", "path", "children_ids", "Node Type"}

@@ -72,20 +72,15 @@ insert into check_params (num, database, param, value, default_value) values
     (10,'postgres', 'threshold_rows',    '1000',   '1000');
 
 insert into plan_fields (database, raw, key, enabled) values
-    ('postgres', 'Relation Name',          'relation',               1),
-    ('postgres', 'Index Name',             'index',                  1),
-    ('postgres', 'Actual Rows',            'actual_rows',            1),
-    ('postgres', 'Actual Loops',           'actual_loops',           1),
-    ('postgres', 'Plan Rows',              'plan_rows',              1),
-    ('postgres', 'Rows Removed by Filter', 'rows_removed_by_filter', 1),
-    ('postgres', 'Heap Fetches',           'heap_fetches',           1),
-    ('postgres', 'Shared Read Blocks',     'shared_read_blocks',     1),
-    ('postgres', 'Sort Method',            'sort_method',            1),
-    ('postgres', 'Sort Space Type',        'sort_space_type',        1),
-    ('postgres', 'Sort Space Used',        'sort_space_used_kb',     1),
-    ('postgres', 'Hash Buckets',           'hash_buckets',           1),
-    ('postgres', 'Hash Batches',           'hash_batches',           1),
-    ('postgres', 'Peak Memory Usage',      'peak_memory_usage_kb',   1),
-    ('postgres', 'Disk Usage',             'disk_usage_kb',          1),
-    ('postgres', 'Parallel Aware',         'parallel_aware',         1);
+    -- Noise — hide entirely (false = no signal)
+    ('postgres', 'Parallel Aware',          'parallel_aware',         0),
+    ('postgres', 'Async Capable',           'async_capable',          0),
+    ('postgres', 'Disabled',                'disabled',               0),
+
+    -- Meaningful zeros — keep 0 (absence of problem is the signal)
+    ('postgres', 'Heap Fetches',            'heap_fetches',           1),
+    ('postgres', 'Rows Removed by Filter',  'rows_removed_by_filter', 1),
+    ('postgres', 'Shared Read Blocks',      'shared_read_blocks',     1),
+    ('postgres', 'Temp Read Blocks',        'temp_read_blocks',       1),
+    ('postgres', 'Temp Written Blocks',     'temp_written_blocks',    1);
 

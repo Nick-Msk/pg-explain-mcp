@@ -342,6 +342,9 @@ class CheckRegistry:
     def load_fields(self) -> dict[str, str]:
         return load_plan_fields(TARGET_DB_TYPE, self._db_path)
 
+    def load_field_policy(self) -> dict[str, int]:
+        return load_field_policy(TARGET_DB_TYPE, self._db_path)
+
 def init_db(db_path: Path | str = DEFAULT_DB) -> None:
     """Create or rebuild the config database from schema.sql and seed.sql.
 
@@ -400,12 +403,37 @@ def load_plan_fields(
         ).fetchall()
         return {raw: key for raw, key in rows}
 
-if __name__ == "__main__":
+def load_field_policy(
+    database: str = TARGET_DB_TYPE,
+    db_path: Path | str = DEFAULT_DB,
+) -> dict[str, int]:
+    """Return {raw_field_name: mode} for parse output filtering.
+
+    Modes:
+
+    - ``0``   — hide the field entirely.
+    - ``1``   — keep the field, including zero values.
+    - ``999`` — unknown semantics: keep, but drop numeric zeros.
+
+    Fields not listed in ``plan_fields`` are treated as mode 999.
+    """
+    db_path = Path(db_path)
+    _ensure_db(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            "select raw, enabled from plan_fields where database = ?",
+            (database,),
+        ).fetchall()
+        return {raw: mode for raw, mode in rows}
+
+def main(argv: list[str] | None = None) -> int:
+    """Entry point for `pg-explain-config` console script."""
     import argparse
 
     parser = argparse.ArgumentParser(
-        prog="python -m pg_explain_mcp.config",
-        description="Manage the SQLite check registry for pg-explain-mcp.",
+        prog="pg-explain-config",
+        description="Manage the SQLite config for pg-explain-mcp.",
     )
     parser.add_argument(
         "--init",
@@ -415,45 +443,61 @@ if __name__ == "__main__":
     parser.add_argument(
         "--show",
         action="store_true",
-        help="Print the current registry as a table and exit.",
+        help="Print the current registry and plan field policy.",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if args.init:
         init_db()
-    elif args.show:
-        with sqlite3.connect(DEFAULT_DB) as conn:
-            conn.row_factory = sqlite3.Row
+        return 0
 
-            print("databases:")
-            for r in conn.execute(
-                "select database from databases order by database"
-            ):
-                print(f"  {r['database']}")
+    if args.show:
+        _show()
+        return 0
 
-            print("checks:")
-            for r in conn.execute(
-                "select num, database, name, enabled, tags "
-                "from checks_with_tags "
-                "order by database, num"
-            ):
-                mark = "on " if r["enabled"] else "off"
-                tags = f" [{r['tags']}]" if r["tags"] else ""
-                print(
-                    f"  {r['database']}  {r['num']:>2}  [{mark}]  "
-                    f"{r['name']}{tags}"
-                )
+    parser.print_help()
+    return 0
 
-            print("plan fields:")
-            for r in conn.execute(
-                "select database, raw, key, enabled from plan_fields "
+
+def _show() -> None:
+    """Print databases, checks, and plan field policy."""
+    with sqlite3.connect(DEFAULT_DB) as conn:
+        conn.row_factory = sqlite3.Row
+
+        print("databases:")
+        for r in conn.execute(
+            "select database from databases order by database"
+        ):
+            print(f"  {r['database']}")
+
+        print("checks:")
+        for r in conn.execute(
+            "select num, database, name, enabled, tags "
+            "from checks_with_tags "
+            "order by database, num"
+        ):
+            mark = "on " if r["enabled"] else "off"
+            tags = f" [{r['tags']}]" if r["tags"] else ""
+            print(
+                f"  {r['database']}  {r['num']:>2}  [{mark}]  "
+                f"{r['name']}{tags}"
+            )
+
+        _FIELD_MODES = {0: "hide", 1: "keep", 999: "auto"}
+
+        print("plan fields:")
+        for r in conn.execute(
+            "select database, raw, key, enabled from plan_fields "
             "order by database, raw"
-            ):
-                mark = "on " if r["enabled"] else "off"
-                print(
-                    f"  {r['database']}  [{mark}]  "
-                    f"{r['raw']!r} → {r['key']!r}"
-                )
-    else:
-        parser.print_help()
+        ):
+            mode = _FIELD_MODES.get(r["enabled"], f"?{r['enabled']}")
+            print(
+                f"  {r['database']}  [{mode:4}]  "
+                f"{r['raw']!r} → {r['key']!r}"
+            )
+
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(main())
 
