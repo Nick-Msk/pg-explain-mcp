@@ -36,6 +36,82 @@ class Issue:
     def with_context(self, depth: int, parent_node: str) -> "Issue":
         return replace(self, depth=depth, parent_node=parent_node)
 
+@dataclass
+class PlanNode:
+    """A single node in a parsed plan.
+
+    Navigation is by object reference — ``parent`` and ``children``
+    point to other PlanNode instances, not ids. Comparable to
+    ``struct PlanNode { PlanNode *parent; PlanNode **children; }``
+    in C, plus the EXPLAIN fields attached.
+    """
+
+    depth: int
+    path: str
+    parent: "PlanNode | None" = None
+    children: list["PlanNode"] = field(default_factory=list)
+    fields: dict[str, Any] = field(default_factory=dict)
+
+    # --- field access (behave like the old dict) --------------------
+
+    def __getitem__(self, key: str) -> Any:
+        return self.fields[key]
+
+    def __contains__(self, key: str) -> bool:
+        return key in self.fields
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return self.fields.get(key, default)
+
+    def items(self):
+        return self.fields.items()
+
+    @property
+    def node_type(self) -> str:
+        return self.fields.get("Node Type", "?")
+
+    # --- navigation -------------------------------------------------
+
+    def ancestors(self) -> Iterator["PlanNode"]:
+        """Immediate parent → … → root."""
+        cur = self.parent
+        while cur is not None:
+            yield cur
+            cur = cur.parent
+
+    def descendants(self) -> Iterator["PlanNode"]:
+        """All descendants in DFS pre-order."""
+        stack = list(reversed(self.children))
+        while stack:
+            n = stack.pop()
+            yield n
+            stack.extend(reversed(n.children))
+
+    def root(self) -> "PlanNode":
+        n = self
+        while n.parent is not None:
+            n = n.parent
+        return n
+
+    def is_under(self, node_type: str) -> bool:
+        """True if any ancestor (or self) has the given Node Type."""
+        return self.node_type == node_type or any(
+            a.node_type == node_type for a in self.ancestors()
+        )
+
+class ParsedPlanCheckBase(CheckBase):
+    """Checks that inspect a single node with free navigation.
+
+    The analyzer calls ``check(node)`` for every node in pre-order.
+    ``node.parent`` and ``node.children`` are real object references —
+    navigation to any ancestor or descendant is direct, no path
+    parsing involved.
+    """
+
+    @abstractmethod
+    def check(self, node: PlanNode) -> list[Issue]:
+        ...
+
 # ---------------------------------------------------------------------------
 # Checks (adapters)
 # ---------------------------------------------------------------------------
