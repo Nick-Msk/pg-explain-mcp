@@ -162,3 +162,150 @@ def get_params(names: tuple[str, ...] | None = None) -> list[dict[str, Any]]:
             cur.execute(query, {"names": list(names)})
             return cur.fetchall()
 
+# ---------------------------------------------------------------------------
+# Relation metadata and statistics
+# ---------------------------------------------------------------------------
+
+
+def _relation_filter(
+    relation: str | None,
+    name_col: str = "c.relname",
+    schema_col: str = "ns.nspname",
+) -> tuple[str, dict[str, Any]]:
+    """Build a WHERE fragment and params from a relation filter.
+
+    Accepts either ``table`` or ``schema.table``. Returns
+    ``("", {})`` if ``relation`` is None — the caller must decide how
+    to combine the fragment with its own WHERE clause.
+    """
+    if not relation:
+        return "", {}
+    if "." in relation:
+        schema, _, name = relation.partition(".")
+        return (
+            f"{schema_col} = %(schema)s AND {name_col} = %(name)s",
+            {"schema": schema, "name": name},
+        )
+    return f"{name_col} = %(name)s", {"name": relation}
+
+
+def get_relation_info(relation: str | None = None) -> list[dict[str, Any]]:
+    """Return metadata for user relations from ``pg_class``.
+
+    Covers tables, partitioned tables, matviews, views, and foreign
+    tables. Size figures come from ``pg_relation_size`` /
+    ``pg_indexes_size`` / ``pg_total_relation_size``.
+
+    Args:
+        relation: Optional filter — ``table`` or ``schema.table``.
+            If omitted, returns every user relation.
+
+    Returns:
+        One dict per relation, ordered by (schema, name).
+    """
+    where = [
+        "ns.nspname NOT IN ('pg_catalog', 'information_schema')",
+        "c.relkind IN ('r', 'p', 'm', 'v', 'f')",
+    ]
+    extra, params = _relation_filter(relation)
+    if extra:
+        where.append(extra)
+
+    query = f"""
+        SELECT
+            ns.nspname                              AS schema_name,
+            c.relname                               AS relation_name,
+            c.relkind                               AS relkind,
+            c.relpersistence                        AS persistence,
+            am.amname                               AS access_method,
+            pg_get_userbyid(c.relowner)             AS owner,
+            c.reltuples::bigint                     AS estimated_rows,
+            c.relpages                              AS pages,
+            pg_relation_size(c.oid)                 AS heap_size_bytes,
+            pg_indexes_size(c.oid)                  AS index_size_bytes,
+            pg_total_relation_size(c.oid)           AS total_size_bytes,
+            (SELECT count(*)
+             FROM pg_attribute a
+             WHERE a.attrelid = c.oid
+               AND a.attnum > 0
+               AND NOT a.attisdropped)              AS column_count,
+            (SELECT count(*)
+             FROM pg_index i
+             WHERE i.indrelid = c.oid)              AS index_count,
+            ts.spcname                              AS tablespace,
+            obj_description(c.oid, 'pg_class')      AS comment
+        FROM pg_class c
+        JOIN pg_namespace ns ON ns.oid = c.relnamespace
+        LEFT JOIN pg_am am ON am.oid = c.relam
+        LEFT JOIN pg_tablespace ts ON ts.oid = c.reltablespace
+        WHERE {' AND '.join(where)}
+        ORDER BY ns.nspname, c.relname
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, params)
+            return cur.fetchall()
+
+
+def get_relation_stat_info(
+    relation: str | None = None,
+) -> list[dict[str, Any]]:
+    """Return runtime statistics for user tables.
+
+    Combines ``pg_stat_user_tables`` (scan counters, tuple changes,
+    vacuum/analyze timestamps) with ``pg_class`` (``reltuples``,
+    ``relpages``, ``relallvisible``).
+
+    Args:
+        relation: Optional filter — ``table`` or ``schema.table``.
+
+    Returns:
+        One dict per table, ordered by (schema, name).
+    """
+    where: list[str] = []
+    extra, params = _relation_filter(
+        relation,
+        name_col="s.relname",
+        schema_col="s.schemaname",
+    )
+    if extra:
+        where.append(extra)
+    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+
+    query = f"""
+        SELECT
+            s.schemaname                            AS schema_name,
+            s.relname                               AS relation_name,
+            c.reltuples::bigint                     AS estimated_rows,
+            c.relpages                              AS pages,
+            c.relallvisible                         AS all_visible_pages,
+            s.seq_scan,
+            s.seq_tup_read,
+            s.idx_scan,
+            s.idx_tup_fetch,
+            s.n_tup_ins,
+            s.n_tup_upd,
+            s.n_tup_del,
+            s.n_tup_hot_upd,
+            s.n_live_tup,
+            s.n_dead_tup,
+            s.n_mod_since_analyze,
+            s.n_ins_since_vacuum,
+            s.last_vacuum,
+            s.last_autovacuum,
+            s.last_analyze,
+            s.last_autoanalyze,
+            s.vacuum_count,
+            s.autovacuum_count,
+            s.analyze_count,
+            s.autoanalyze_count
+        FROM pg_stat_user_tables s
+        JOIN pg_class c ON c.oid = s.relid
+        {where_sql}
+        ORDER BY s.schemaname, s.relname
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, params)
+            return cur.fetchall()
+

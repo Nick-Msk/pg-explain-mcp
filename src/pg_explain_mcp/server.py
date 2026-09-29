@@ -24,7 +24,14 @@ from pg_explain_mcp.config import (
 from pg_explain_mcp.config import (
     show_params as show_params_impl,
 )
-from pg_explain_mcp.db import explain_query, get_indexes, get_params, get_schema
+from pg_explain_mcp.db import (
+    explain_query,
+    get_indexes,
+    get_params,
+    get_relation_info,
+    get_relation_stat_info,
+    get_schema,
+)
 
 _registry = CheckRegistry(DEFAULT_DB)
 
@@ -81,6 +88,87 @@ def _format_indexes(rows: list[dict[str, Any]]) -> str:
             f"{row['index_name']} [{kind}] ({cols_str})"
         )
     return "\n".join(lines)
+
+def _human_bytes(n: int | None) -> str:
+    if not n:
+        return "0 B"
+    value = float(n)
+    for unit in ("B", "kB", "MB", "GB", "TB"):
+        if value < 1024:
+            return f"{value:.1f} {unit}"
+        value /= 1024
+    return f"{value:.1f} PB"
+
+
+def _format_timestamp(value: Any) -> str:
+    return value.strftime("%Y-%m-%d %H:%M:%S") if value else "—"
+
+
+def _format_relation_info(rows: list[dict[str, Any]]) -> str:
+    if not rows:
+        return "No relations found."
+    lines: list[str] = []
+    for r in rows:
+        lines.append(f"{r['schema_name']}.{r['relation_name']} [{r['relkind']}]")
+        lines.append(f"  rows (est):     {r['estimated_rows']:,}")
+        lines.append(f"  pages:          {r['pages']:,}")
+        lines.append(f"  columns:        {r['column_count']}")
+        lines.append(f"  indexes:        {r['index_count']}")
+        lines.append(f"  heap size:      {_human_bytes(r['heap_size_bytes'])}")
+        lines.append(f"  index size:     {_human_bytes(r['index_size_bytes'])}")
+        lines.append(f"  total size:     {_human_bytes(r['total_size_bytes'])}")
+        lines.append(f"  owner:          {r['owner']}")
+        lines.append(f"  access method:  {r['access_method'] or '—'}")
+        lines.append(f"  persistence:    {r['persistence']}")
+        if r["tablespace"]:
+            lines.append(f"  tablespace:     {r['tablespace']}")
+        if r["comment"]:
+            lines.append(f"  comment:        {r['comment']}")
+        lines.append("")
+    return "\n".join(lines).rstrip()
+
+
+def _format_relation_stats(rows: list[dict[str, Any]]) -> str:
+    if not rows:
+        return "No statistics found."
+    lines: list[str] = []
+    for r in rows:
+        lines.append(f"{r['schema_name']}.{r['relation_name']}")
+        lines.append(f"  rows (est):         {r['estimated_rows']:,}")
+        lines.append(
+            f"  pages:              {r['pages']:,} "
+            f"({r['all_visible_pages']:,} all-visible)"
+        )
+        lines.append(
+            f"  live/dead tuples:   {r['n_live_tup']:,} / {r['n_dead_tup']:,}"
+        )
+        lines.append(f"  mod since analyze:  {r['n_mod_since_analyze']:,}")
+        lines.append(f"  ins since vacuum:   {r['n_ins_since_vacuum']:,}")
+        lines.append(
+            f"  seq scans:          {r['seq_scan']:,} "
+            f"(rows read {r['seq_tup_read']:,})"
+        )
+        lines.append(
+            f"  idx scans:          {r['idx_scan']:,} "
+            f"(rows fetched {r['idx_tup_fetch']:,})"
+        )
+        lines.append(
+            f"  tuple changes:      ins={r['n_tup_ins']:,} "
+            f"upd={r['n_tup_upd']:,} del={r['n_tup_del']:,} "
+            f"hot={r['n_tup_hot_upd']:,}"
+        )
+        lines.append(f"  last vacuum:        {_format_timestamp(r['last_vacuum'])}")
+        lines.append(f"  last autovacuum:    {_format_timestamp(r['last_autovacuum'])}")
+        lines.append(f"  last analyze:       {_format_timestamp(r['last_analyze'])}")
+        lines.append(f"  last autoanalyze:   {_format_timestamp(r['last_autoanalyze'])}")
+        lines.append(
+            f"  counters:           vacuum={r['vacuum_count']} "
+            f"autovacuum={r['autovacuum_count']} "
+            f"analyze={r['analyze_count']} "
+            f"autoanalyze={r['autoanalyze_count']}"
+        )
+        lines.append("")
+    return "\n".join(lines).rstrip()
 
 def _collect_relation_names(node: dict[str, Any], out: set[str]) -> None:
     rel = node.get("Relation Name")
@@ -148,6 +236,42 @@ def list_parameters(names: str | None = None) -> str:
         parsed = None
     rows = get_params(parsed)
     return _format_params(rows)
+
+@mcp.tool()
+def list_relation_info(relation: str | None = None) -> str:
+    """Return metadata for user relations from pg_class.
+
+    Covers tables, partitioned tables, matviews, views, foreign
+    tables. Sizes come from pg_relation_size / pg_indexes_size /
+    pg_total_relation_size.
+
+    Args:
+        relation: Optional filter — ``table`` or ``schema.table``.
+            If omitted, returns every user relation.
+    """
+    try:
+        rows = get_relation_info(relation)
+        return _format_relation_info(rows)
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def list_relation_stats(relation: str | None = None) -> str:
+    """Return runtime statistics for user tables.
+
+    Combines pg_stat_user_tables (scan counters, tuple changes,
+    vacuum/analyze timestamps) with pg_class row/page estimates and
+    the visibility map size.
+
+    Args:
+        relation: Optional filter — ``table`` or ``schema.table``.
+    """
+    try:
+        rows = get_relation_stat_info(relation)
+        return _format_relation_stats(rows)
+    except Exception as e:
+        return f"Error: {e}"
 
 @mcp.tool()
 def explain(sql: str) -> str:
