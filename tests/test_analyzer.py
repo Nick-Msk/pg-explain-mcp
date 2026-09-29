@@ -1514,13 +1514,34 @@ class TestParsePlan:
         }])
         text = format_plan_tree(nodes)
         lines = text.split("\n")
-        assert "Limit [depth=0]" in lines[0]
+        assert "Limit [depth=0] [path=0:0]" in lines[0]
         sort_line = next(line for line in lines if "Sort" in line)
         seq_line = next(line for line in lines if "Seq Scan" in line)
         assert sort_line.startswith("  ")
         assert "[depth=1]" in sort_line
         assert seq_line.startswith("    ")
         assert "[depth=2]" in seq_line
+    def test_root_path(self):
+        plan = [{"Plan": {"Node Type": "Limit"}}]
+        assert parse_plan(plan)[0]["path"] == "0:0"
+
+    def test_paths_in_siblings(self):
+        plan = [{
+            "Plan": {
+                "Node Type": "Hash Join",
+                "Plans": [
+                    {"Node Type": "Seq Scan"},
+                    {"Node Type": "Hash", "Plans": [{"Node Type": "Seq Scan"}]},
+                ],
+            }
+        }]
+        paths = [n["path"] for n in parse_plan(plan)]
+        assert paths == [
+            "0:0",
+            "0:0/1:0",
+            "0:0/1:1",
+            "0:0/1:1/2:0",
+        ]
 
 class TestFormatPlanTree:
     def test_empty(self):
@@ -1532,6 +1553,8 @@ class TestFormatPlanTree:
         }])
         text = format_plan_tree(nodes)
         assert "Limit" in text
+        assert "[depth=0]" in text
+        assert "[path=0:0]" in text
         assert "Plan Rows: 100" in text
 
     def test_child_is_indented(self):
@@ -1544,9 +1567,9 @@ class TestFormatPlanTree:
         }])
         text = format_plan_tree(nodes)
         lines = text.split("\n")
-        assert lines[0] == "Limit [depth=0]"
+        assert lines[0] == "Limit [depth=0] [path=0:0]"
         child_line = next(line for line in lines if "Index Scan" in line)
-        assert child_line == "  Index Scan [depth=1]"
+        assert child_line == "  Index Scan [depth=1] [path=0:0/1:0]"
 
     def test_structural_fields_not_printed(self):
         nodes = parse_plan([{
@@ -1569,6 +1592,33 @@ class TestFormatPlanTree:
         assert node["Shared Read Blocks"] == 0
         assert node["Temp Read Blocks"] == 0
 
+    def test_depth_increases_with_nesting(self):
+        nodes = parse_plan([{
+            "Plan": {
+                "Node Type": "Limit",
+                "Plans": [{
+                    "Node Type": "Sort",
+                    "Plans": [{"Node Type": "Seq Scan"}],
+                }],
+            }
+        }])
+        text = format_plan_tree(nodes)
+        lines = text.split("\n")
+
+        # Root — depth 0, path 0:0
+        assert lines[0] == "Limit  [depth=0] [path=0:0]"
+
+        # Sort — child of root, first (and only) sibling
+        sort_line = next(line for line in lines if "Sort" in line)
+        assert sort_line.startswith("  ")
+        assert "[depth=1]" in sort_line
+        assert "[path=0:0/1:0]" in sort_line
+
+        # Seq Scan — grandchild, first (and only) sibling
+        scan_line = next(line for line in lines if "Seq Scan" in line)
+        assert scan_line.startswith("    ")
+        assert "[depth=2]" in scan_line
+        assert "[path=0:0/1:0/2:0]" in scan_line
 
 class TestFilteredParsePlan:
     def test_drops_zero_numeric(self):

@@ -1015,16 +1015,12 @@ def _make_summary(issues: list[Issue], exec_time: float) -> str:
         f"Execution time: {exec_time:.2f} ms."
     )
 
+
 def _parse_plan_impl(
     plan_json: list[dict[str, Any]],
     *,
     compact: bool,
 ) -> list[dict[str, Any]]:
-    """Shared parser implementation.
-
-    ``compact=True`` drops numeric fields whose value is exactly zero.
-    Booleans, empty lists, and nulls are kept — they carry meaning.
-    """
     if not plan_json:
         return []
 
@@ -1032,14 +1028,28 @@ def _parse_plan_impl(
     nodes: list[dict[str, Any]] = []
 
     def _is_zero(value: Any) -> bool:
-        return isinstance(value, (int, float)) and not isinstance(value, bool) and value == 0
+        return (
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and value == 0
+        )
 
-    def visit(node, parent_id, depth):
+    def visit(
+        node: dict[str, Any],
+        parent_id: int | None,
+        depth: int,
+        parent_path: str,
+        sibling_index: int,
+    ) -> int:
         node_id = len(nodes)
+        segment = f"{depth}:{sibling_index}"
+        path = f"{parent_path}/{segment}" if parent_path else segment
+
         entry: dict[str, Any] = {
             "id": node_id,
             "parent_id": parent_id,
             "depth": depth,
+            "path": path,
             "children_ids": [],
         }
         for key, value in node.items():
@@ -1050,13 +1060,13 @@ def _parse_plan_impl(
             entry[key] = value
         nodes.append(entry)
 
-        for child in node.get("Plans", []):
-            child_id = visit(child, node_id, depth + 1)
+        for i, child in enumerate(node.get("Plans", [])):
+            child_id = visit(child, node_id, depth + 1, path, i)
             entry["children_ids"].append(child_id)
 
         return node_id
 
-    visit(root, None, 0)
+    visit(root, None, 0, "", 0)
     return nodes
 
 def parse_plan(plan_json: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1093,7 +1103,7 @@ def filtered_parse_plan(plan_json: list[dict[str, Any]]) -> list[dict[str, Any]]
 
 
 _STRUCTURAL_KEYS = frozenset(
-    {"id", "parent_id", "depth", "children_ids", "Node Type"}
+    {"id", "parent_id", "depth", "path", "children_ids", "Node Type"}
 )
 
 
@@ -1124,7 +1134,11 @@ def format_plan_tree(nodes: list[dict[str, Any]]) -> str:
     def render(node_id: int) -> None:
         node = by_id[node_id]
         base = "  " * node["depth"]
-        lines.append(f"{base}{node['Node Type']} [depth={node['depth']}]")
+        lines.append(
+            f"{base}{node['Node Type']} "
+            f" [depth={node['depth']}]"
+            f" [path={node['path']}]"
+        )
         for key, value in node.items():
             if key in _STRUCTURAL_KEYS:
                 continue
