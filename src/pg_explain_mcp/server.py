@@ -6,7 +6,8 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from pg_explain_mcp.analyzer import (
-    analyze_plan,
+    #analyze_plan,
+    new_analyze_plan,
     filtered_parse_plan,
     format_plan_tree,
     summarize_plan_node,
@@ -172,13 +173,6 @@ def _format_relation_stats(rows: list[dict[str, Any]]) -> str:
         lines.append("")
     return "\n".join(lines).rstrip()
 
-def _collect_relation_names(node: dict[str, Any], out: set[str]) -> None:
-    rel = node.get("Relation Name")
-    if rel:
-        out.add(rel)
-    for child in node.get("Plans", []):
-        _collect_relation_names(child, out)
-
 @mcp.tool()
 def ping() -> str:
     """Health check — returns 'pong' if the server is running."""
@@ -295,20 +289,12 @@ def explain(sql: str) -> str:
     try:
         raw = explain_query(sql, analyze=True, buffers=True)
         plan_json = raw["QUERY PLAN"]
-        root = plan_json[0]
-        plan_tree = root.get("Plan", {})
 
-        relation_names: set[str] = set()
-        _collect_relation_names(plan_tree, relation_names)
-        relation_indexes = {
-            rel: get_indexes(rel) for rel in relation_names
-        }
+        checks = _registry.load()
+        #report = analyze_plan(plan_json, checks=checks)
+        report = new_analyze_plan(plan_json, checks=checks)
 
-        checks = _registry.load(relation_indexes=relation_indexes)
-        fields = _registry.load_fields()
-
-        report = analyze_plan(plan_json, checks=checks)
-        report["plan_nodes"] = summarize_plan_node(plan_tree, fields)
+        report["plan_nodes"] = summarize_plan_node(plan_json, checks=checks)
 
         return json.dumps(report, indent=2, ensure_ascii=False)
     except ValueError as e:

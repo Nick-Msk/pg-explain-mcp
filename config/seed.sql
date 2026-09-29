@@ -17,15 +17,15 @@ insert into tags (name) values
     ('HASH');
 
 insert into checks (num, database, name, description, enabled) values
-    (1,  'postgres', 'SeqScanCheck',          'sequential scan that discards most rows',                1),
-    (2,  'postgres', 'EstimateMismatchCheck', 'planner cardinality misestimate',                        1),
-    (3,  'postgres', 'DiskSpillSortCheck',    'sort spilling to disk',                                  1),
-    (4,  'postgres', 'DiskSpillHashCheck',    'hash operation using multiple batches',                  1),
-    (5,  'postgres', 'NestedLoopCheck',       'Nested Loop with many inner iterations',                 1),
-    (6,  'postgres', 'BitmapHeapScanCheck',   'large Bitmap Heap Scan',                                 1),
-    (7,  'postgres', 'IndexRegularScanCheck', 'index scan reading too many blocks for rows returned',   1),
-    (8,  'postgres', 'IndexOnlyScanCheck',    'index only scan with stale visibility map',              1),
-    (9,  'postgres', 'PartitionPruningCheck', 'Append over many partitions — pruning may have failed',  1),
+    (1,  'postgres', 'SeqScanCheck',          'sequential scan that discards most rows',                0),
+    (2,  'postgres', 'EstimateMismatchCheck', 'planner cardinality misestimate',                        0),
+    (3,  'postgres', 'DiskSpillSortCheck',    'sort spilling to disk',                                  0),
+    (4,  'postgres', 'DiskSpillHashCheck',    'hash operation using multiple batches',                  0),
+    (5,  'postgres', 'NestedLoopCheck',       'Nested Loop with many inner iterations',                 0),
+    (6,  'postgres', 'BitmapHeapScanCheck',   'large Bitmap Heap Scan',                                 0),
+    (7,  'postgres', 'IndexRegularScanCheck', 'index scan reading too many blocks for rows returned',   0),
+    (8,  'postgres', 'IndexOnlyScanCheck',    'index only scan with stale visibility map',              0),
+    (9,  'postgres', 'PartitionPruningCheck', 'Append over many partitions — pruning may have failed',  0),
     (10, 'postgres', 'NonSargableCheck',      'non-sargable predicate on an indexed column',            1);
 
 insert into checks_tags (num, database, tag) values

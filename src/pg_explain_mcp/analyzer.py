@@ -7,8 +7,11 @@ checks (adapters) to every node. To add a new check, implement the
 
 import re
 from abc import ABC, abstractmethod
-from dataclasses import asdict, dataclass, replace
+from collections.abc import Iterator
+from dataclasses import asdict, dataclass, field, replace
 from typing import Any, Protocol
+
+from pg_explain_mcp.db import get_indexes
 
 SEVERITY_WARNING = "warning"
 SEVERITY_INFO = "info"
@@ -99,6 +102,44 @@ class PlanNode:
             a.node_type == node_type for a in self.ancestors()
         )
 
+class CheckBase(ABC):
+    """Common base for all checks.
+
+    Subclasses declare:
+
+      - ``name``   — registry key, matches SQLite ``checks.name``.
+      - ``type``   — issue type, matches JSON ``issues[].type``.
+      - ``PARAMS`` — ``{param_name: type}`` — a schema for coercion.
+
+    Actual values come from ``check_params`` and are passed to the
+    constructor as ``dict[str, str]``. Each value is coerced to the
+    declared type. A missing parameter is an error — the database is
+    the source of truth, and a check should never fall back to an
+    implicit default.
+    """
+
+    name: str
+    type: str
+    PARAMS: dict[str, type] = {}
+
+    def __init__(
+        self,
+        params: dict[str, str] | None = None,
+    ) -> None:
+        raw = params or {}
+        self.params: dict[str, Any] = {}
+        for key, typ in self.PARAMS.items():
+            if key not in raw:
+                raise ValueError(
+                    f"{self.name}: missing required param '{key}'"
+                )
+            try:
+                self.params[key] = typ(raw[key])
+            except (ValueError, TypeError) as e:
+                raise ValueError(
+                    f"{self.name}.{key}: invalid value {raw[key]!r} ({e})"
+                ) from e
+
 class ParsedPlanCheckBase(CheckBase):
     """Checks that inspect a single node with free navigation.
 
@@ -108,9 +149,158 @@ class ParsedPlanCheckBase(CheckBase):
     parsing involved.
     """
 
-    @abstractmethod
     def check(self, node: PlanNode) -> list[Issue]:
+        info = self.gather_info(node)
+        if info is None or not self.validate_rule(info):
+            return []
+        return self.generate_msg(info)
+
+    @abstractmethod
+    def gather_info(self, node: PlanNode) -> dict[str, Any] | None:
         ...
+
+    @abstractmethod
+    def validate_rule(self, info: dict[str, Any]) -> bool:
+        ...
+
+    @abstractmethod
+    def generate_msg(self, info: dict[str, Any]) -> list[Issue]:
+        ...
+
+def new_parse_plan(plan_json: list[dict[str, Any]]) -> PlanNode | None:
+    """Build a linked tree from EXPLAIN (FORMAT JSON) output.
+
+    Returns the root PlanNode, or None for an empty plan.
+    """
+    if not plan_json:
+        return None
+
+    def build(
+        raw: dict[str, Any],
+        parent: PlanNode | None,
+        depth: int,
+        parent_path: str,
+        sibling_index: int,
+    ) -> PlanNode:
+        segment = f"{depth}:{sibling_index}"
+        path = f"{parent_path}/{segment}" if parent_path else segment
+        fields = {k: v for k, v in raw.items() if k != "Plans"}
+        node = PlanNode(depth=depth, path=path, parent=parent, fields=fields)
+        for i, child_raw in enumerate(raw.get("Plans", [])):
+            node.children.append(build(child_raw, node, depth + 1, path, i))
+        return node
+
+    return build(plan_json[0].get("Plan", {}), None, 0, "", 0)
+
+
+def new_plan_to_list(
+    root: PlanNode | None,
+    field_policy: dict[str, int] | None = None,
+) -> list[dict[str, Any]]:
+    """Serialize the tree to a flat, JSON-friendly list.
+
+    Each entry carries id, parent_id, depth, path, children_ids plus
+    the EXPLAIN fields. ``field_policy`` controls filtering:
+    0 = hide, 1 = keep zeros, 999 = drop zeros; None = keep all.
+    """
+    if root is None:
+        return []
+
+    result: list[dict[str, Any]] = []
+
+    def visit(node: PlanNode, parent_id: int | None) -> int:
+        node_id = len(result)
+        entry: dict[str, Any] = {
+            "id": node_id,
+            "parent_id": parent_id,
+            "depth": node.depth,
+            "path": node.path,
+            "children_ids": [],
+        }
+        for key, value in node.fields.items():
+            if field_policy is not None:
+                mode = field_policy.get(key, _FIELD_UNKNOWN)
+                if mode == _FIELD_HIDE:
+                    continue
+                if mode != _FIELD_KEEP_ZEROS and _is_zero(value):
+                    continue
+            entry[key] = value
+        result.append(entry)
+        for child in node.children:
+            child_id = visit(child, node_id)
+            entry["children_ids"].append(child_id)
+        return node_id
+
+    visit(root, None)
+    return result
+
+
+def new_format_plan_tree(
+    root: PlanNode | None,
+    marker_tabs: int = 5,
+) -> str:
+    """Render a PlanNode tree as indented text.
+
+    Same visual layout as ``format_plan_tree``, but takes a PlanNode
+    root instead of a flat list.
+    """
+    if root is None:
+        return "(empty plan)"
+
+    pad = "\t" * marker_tabs
+    lines: list[str] = []
+
+    def render(node: PlanNode) -> None:
+        base = "  " * node.depth
+        marker = node.path.rsplit("/", 1)[-1]
+        lines.append(f"{base}{node.node_type}{pad}[{marker}]")
+        for key, value in node.fields.items():
+            lines.append(f"{base}  {key}: {value}")
+        for child in node.children:
+            render(child)
+
+    render(root)
+    return "\n".join(lines)
+
+def new_analyze_plan(
+    plan_json: list[dict[str, Any]],
+    checks: tuple[CheckBase, ...],
+) -> dict[str, Any]:
+    """Analyze a plan using PlanNode-based checks.
+
+    Walks every node in pre-order and calls ``check(node)`` on each
+    check that inherits from ``ParsedPlanCheckBase``. Checks still on
+    the old ``PlanCheckBase`` are skipped here — use the old
+    ``analyze_plan`` until they migrate.
+    """
+    if not plan_json:
+        return {"issues": [], "summary": "Empty plan"}
+
+    root = plan_json[0]
+    execution_time = root.get("Execution Time", 0)
+    planning_time = root.get("Planning Time", 0)
+
+    tree = new_parse_plan(plan_json)
+    if tree is None:
+        return {"issues": [], "summary": "Empty plan"}
+
+    new_checks = tuple(
+        c for c in checks if isinstance(c, ParsedPlanCheckBase)
+    )
+
+    issues: list[Issue] = []
+    for node in [tree, *tree.descendants()]:
+        for check in new_checks:
+            issues.extend(check.check(node))
+
+    return {
+        "execution_time_ms": execution_time,
+        "planning_time_ms": planning_time,
+        "total_time_ms": execution_time + planning_time,
+        "issues": [issue.to_dict() for issue in issues],
+        "issue_count": len(issues),
+        "summary": _make_summary(issues, execution_time),
+    }
 
 # ---------------------------------------------------------------------------
 # Checks (adapters)
@@ -130,7 +320,7 @@ class PlanCheck(Protocol):
     def check(self, node: dict[str, Any]) -> list[Issue]:
         ...
 
-class PlanCheckBase(ABC):
+class PlanCheckBase(CheckBase):
     """Base for single-rule checks split into three phases.
 
     - ``gather_info(node)`` extracts values needed to decide. Return
@@ -291,23 +481,13 @@ class EstimateMismatchCheck(PlanCheckBase):
 
     name = "EstimateMismatchCheck"
     type = "estimate_mismatch"
+    PARAMS = {
+        "threshold_ratio": float,
+        "min_rows":        int,
+    }
 
-    def __init__(
-        self,
-        threshold_ratio: float = 10.0,
-        min_rows: int = 1000,
-    ) -> None:
-        self.threshold_ratio = threshold_ratio
-        self.min_rows = min_rows
-
-    def gather_info(
-        self,
-        node: dict[str, Any],
-        parent_type: str = ""
-    ) -> dict[str, Any] | None:
-        # plan_rows under Limit is the full-scan estimate, not the
-        # truncated one. Comparing it to actual produces a spurious ratio.
-        if parent_type == "Limit":
+    def gather_info(self, node: PlanNode) -> dict[str, Any] | None:
+        if node.is_under("Limit"):
             return None
         planned = node.get("Plan Rows", 0)
         actual = node.get("Actual Rows", 0)
@@ -317,16 +497,16 @@ class EstimateMismatchCheck(PlanCheckBase):
             "planned": planned,
             "actual": actual,
             "ratio": max(planned, actual) / min(planned, actual),
-            "node_type": node.get("Node Type", ""),
+            "node_type": node.node_type,
             "relation": node.get("Relation Name", ""),
         }
 
     def validate_rule(self, info: dict[str, Any]) -> bool:
-        if info["planned"] < self.min_rows:
+        if info["planned"] < self.params["min_rows"]:
             return False
-        if info["actual"] < self.min_rows:
+        if info["actual"] < self.params["min_rows"]:
             return False
-        return info["ratio"] > self.threshold_ratio
+        return info["ratio"] > self.params["threshold_ratio"]
 
     def generate_msg(self, info: dict[str, Any]) -> list[Issue]:
         where = f" on '{info['relation']}'" if info["relation"] else ""
@@ -871,7 +1051,7 @@ class PartitionPruningCheck(PlanCheckBase):
         ]
 
 
-class NonSargableCheck(PlanCheckBase):
+class NonSargableCheck(ParsedPlanCheckBase):
     """Non-sargable predicate on a column that has a plain index.
 
     A predicate like ``lower(email) = 'x'`` wraps the column in a
@@ -906,25 +1086,40 @@ class NonSargableCheck(PlanCheckBase):
     name = "NonSargableCheck"
     type = "non_sargable"
 
-    def __init__(
-        self,
-        threshold_rows: int = 1000,
-        relation_indexes: dict[str, list[dict[str, Any]]] | None = None,
-        **_ignored: Any,
-    ) -> None:
-        self.threshold_rows = threshold_rows
-        self.relation_indexes = relation_indexes or {}
+    PARAMS = {
+        "threshold_rows": int,
+    }
+    # Lazy cache: filled on first gather_info, shared only within
+    # this instance. The class-level None is a shared read-only
+    # default — instance assignment shadows it.
+    _indexes: dict[str, list[dict[str, Any]]] | None = None
 
-    def gather_info(
-        self,
-        node: dict[str, Any],
-        parent_type: str = ""
-    ) -> dict[str, Any] | None:
+    def _load_indexes(self) -> dict[str, list[dict[str, Any]]]:
+        """Lazy-load all user indexes, grouped by relation name.
+
+        Called once per check instance. gather_info runs for every
+        plan node, so a per-call get_indexes() would produce N queries
+        per explain.
+        """
+        if self._indexes is None:
+            grouped: dict[str, list[dict[str, Any]]] = {}
+            for row in get_indexes():
+                grouped.setdefault(row["table_name"], []).append(row)
+            self._indexes = grouped
+        return self._indexes
+
+    def gather_info(self, node: PlanNode) -> dict[str, Any] | None:
+        if self._indexes is None:
+            self._indexes = self._load_indexes()
+
         filter_str = node.get("Filter", "")
         if not filter_str:
             return None
 
-        relation = node.get("Relation Name", "?")
+        relation = node.get("Relation Name")
+        if not relation:
+            return None
+
         indexed_columns = self._plain_indexed_columns(relation)
         if not indexed_columns:
             return None
@@ -933,21 +1128,22 @@ class NonSargableCheck(PlanCheckBase):
             func = self._wrapped_in_function(filter_str, column)
             if func is None:
                 continue
+            rows_read = (
+                node.get("Actual Rows", 0)
+                + node.get("Rows Removed by Filter", 0)
+            )
             return {
                 "relation": relation,
                 "column": column,
                 "func": func,
                 "filter": filter_str,
-                "rows_read": (
-                    node.get("Actual Rows", 0)
-                    + node.get("Rows Removed by Filter", 0)
-                ),
+                "rows_read": rows_read,
             }
 
         return None
 
     def validate_rule(self, info: dict[str, Any]) -> bool:
-        return info["rows_read"] >= self.threshold_rows
+        return info["rows_read"] >= self.params["threshold_rows"]
 
     def generate_msg(self, info: dict[str, Any]) -> list[Issue]:
         return [
@@ -967,17 +1163,8 @@ class NonSargableCheck(PlanCheckBase):
             )
         ]
 
-    # ----- helpers -------------------------------------------------------
-
     def _plain_indexed_columns(self, relation: str) -> set[str]:
-        """Columns that a plain ``col = value`` predicate can use.
-
-        Only the leading slot of an index qualifies, and only if that
-        slot is a real column (not an expression). Non-leading columns
-        of composite indexes are excluded — a rewrite to ``col = value``
-        would not use such an index.
-        """
-        indexes = self.relation_indexes.get(relation, [])
+        indexes = self._load_indexes().get(relation, [])
         columns: set[str] = set()
         for idx in indexes:
             leading = idx.get("leading_attnum")

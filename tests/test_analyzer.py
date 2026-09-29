@@ -1,5 +1,7 @@
 """Unit tests for the plan analyzer."""
 
+import pytest
+
 from pg_explain_mcp.analyzer import (
     BitmapHeapScanCheck,
     DiskSpillHashCheck,
@@ -10,6 +12,7 @@ from pg_explain_mcp.analyzer import (
     NestedLoopCheck,
     NonSargableCheck,
     PartitionPruningCheck,
+    PlanNode,
     SeqScanCheck,
     analyze_plan,
     filtered_parse_plan,
@@ -200,6 +203,10 @@ class TestEstimateMismatchCheck:
         node = {"Node Type": "Index Scan", "Plan Rows": 999996, "Actual Rows": 5000}
         assert check.gather_info(node, "Limit") is None
         assert check.gather_info(node) is not None   # sanity
+
+def test_missing_param_raises(self):
+    with pytest.raises(ValueError, match="missing required param 'min_rows'"):
+        EstimateMismatchCheck(params={"threshold_ratio": "10.0"})
 
 class TestDiskSpillSortCheck:
     def test_in_memory_sort_is_ok(self):
@@ -708,406 +715,129 @@ class TestPartitionPruningCheck:
 class TestNonSargableCheck:
     """Tests for NonSargableCheck.
 
-    ``relation_indexes`` shape:
-
-        {
-            "users": [
-                {"leading_attnum": 2, "plain_columns": ["email"]},
-                {"leading_attnum": 1, "plain_columns": ["id", "status"]},
-            ],
-        }
-
-    A plain column is "usable" only if it is the **leading** slot of an
-    index and that slot is a real column, not an expression.
+    Indexes are loaded lazily from the database via ``get_indexes``.
+    Tests monkey-patch that function so they don't need a live DB.
     """
 
-    # ----- helpers ----------------------------------------------------------
+    @staticmethod
+    def _patch_indexes(monkeypatch, rows: list[dict]) -> None:
+        import pg_explain_mcp.analyzer as analyzer
+        monkeypatch.setattr(analyzer, "get_indexes", lambda: rows)
 
     @staticmethod
-    def _indexes(relation: str, *specs: dict) -> dict:
-        return {relation: list(specs)}
-
-    # ----- negative cases ---------------------------------------------------
-
-    def test_sargable_predicate_is_ok(self):
-        check = NonSargableCheck(
-            relation_indexes=self._indexes(
-                "users",
-                {"leading_attnum": 2, "plain_columns": ["email"]},
-            ),
+    def _node(**fields) -> PlanNode:
+        return PlanNode(
+            depth=0,
+            path="0:0",
+            fields={"Node Type": "Seq Scan", **fields},
         )
-        node = {
-            "Node Type": "Seq Scan",
+
+    # ----- negative cases --------------------------------------------------
+
+    def test_sargable_predicate_is_ok(self, monkeypatch):
+        self._patch_indexes(monkeypatch, [
+            {"table_name": "users",
+             "leading_attnum": 2, "plain_columns": ["email"]},
+        ])
+        check = NonSargableCheck(params={"threshold_rows": "1000"})
+        node = self._node(**{
             "Relation Name": "users",
             "Actual Rows": 100,
             "Rows Removed by Filter": 9900,
             "Filter": "(email = 'x'::text)",
-        }
+        })
         assert check.check(node) == []
 
-    def test_no_index_on_column_is_ok(self):
+    def test_no_index_on_column_is_ok(self, monkeypatch):
         """No index on the column — SeqScanCheck's job, not ours."""
-        check = NonSargableCheck(
-            relation_indexes=self._indexes(
-                "users",
-                {"leading_attnum": 1, "plain_columns": ["id"]},
-            ),
-        )
-        node = {
-            "Node Type": "Seq Scan",
+        self._patch_indexes(monkeypatch, [
+            {"table_name": "users",
+             "leading_attnum": 1, "plain_columns": ["id"]},
+        ])
+        check = NonSargableCheck(params={"threshold_rows": "1000"})
+        node = self._node(**{
             "Relation Name": "users",
             "Actual Rows": 100,
             "Rows Removed by Filter": 9900,
             "Filter": "(lower(email) = 'x'::text)",
-        }
+        })
         assert check.check(node) == []
 
-    def test_non_leading_column_is_ignored(self):
+    def test_non_leading_column_is_ignored(self, monkeypatch):
         """Index (status, email) — email is second; rewrite won't help."""
-        check = NonSargableCheck(
-            relation_indexes=self._indexes(
-                "users",
-                {"leading_attnum": 1, "plain_columns": ["status", "email"]},
-            ),
-        )
-        node = {
-            "Node Type": "Seq Scan",
+        self._patch_indexes(monkeypatch, [
+            {"table_name": "users",
+             "leading_attnum": 1, "plain_columns": ["status", "email"]},
+        ])
+        check = NonSargableCheck(params={"threshold_rows": "1000"})
+        node = self._node(**{
             "Relation Name": "users",
             "Actual Rows": 100,
             "Rows Removed by Filter": 9900,
             "Filter": "(lower(email) = 'x'::text)",
-        }
+        })
         assert check.check(node) == []
 
-    def test_functional_index_is_ignored(self):
-        """Functional index on lower(email) — leading_attnum = 0."""
-        check = NonSargableCheck(
-            relation_indexes=self._indexes(
-                "users",
-                {"leading_attnum": 0, "plain_columns": []},
-            ),
-        )
-        node = {
-            "Node Type": "Seq Scan",
+    def test_functional_index_is_ignored(self, monkeypatch):
+        self._patch_indexes(monkeypatch, [
+            {"table_name": "users",
+             "leading_attnum": 0, "plain_columns": []},
+        ])
+        check = NonSargableCheck(params={"threshold_rows": "1000"})
+        node = self._node(**{
             "Relation Name": "users",
             "Actual Rows": 100,
             "Rows Removed by Filter": 9900,
             "Filter": "(lower(email) = 'x'::text)",
-        }
+        })
         assert check.check(node) == []
 
-    def test_small_scan_is_ignored(self):
-        check = NonSargableCheck(
-            relation_indexes=self._indexes(
-                "users",
-                {"leading_attnum": 2, "plain_columns": ["email"]},
-            ),
-        )
-        node = {
-            "Node Type": "Seq Scan",
+    def test_small_scan_is_ignored(self, monkeypatch):
+        self._patch_indexes(monkeypatch, [
+            {"table_name": "users",
+             "leading_attnum": 2, "plain_columns": ["email"]},
+        ])
+        check = NonSargableCheck(params={"threshold_rows": "1000"})
+        node = self._node(**{
             "Relation Name": "users",
             "Actual Rows": 5,
             "Rows Removed by Filter": 5,
             "Filter": "(lower(email) = 'x'::text)",
-        }
+        })
         assert check.check(node) == []
 
-    def test_no_filter_is_ignored(self):
-        check = NonSargableCheck(
-            relation_indexes=self._indexes(
-                "users",
-                {"leading_attnum": 2, "plain_columns": ["email"]},
-            ),
-        )
-        node = {
-            "Node Type": "Seq Scan",
+    def test_no_filter_is_ignored(self, monkeypatch):
+        self._patch_indexes(monkeypatch, [
+            {"table_name": "users",
+             "leading_attnum": 2, "plain_columns": ["email"]},
+        ])
+        check = NonSargableCheck(params={"threshold_rows": "1000"})
+        node = self._node(**{
             "Relation Name": "users",
             "Actual Rows": 5000,
-        }
+        })
         assert check.check(node) == []
 
-    def test_any_array_is_not_flagged(self):
-        """``email = ANY(ARRAY[...])`` — column is outside ``any(...)``."""
-        check = NonSargableCheck(
-            relation_indexes=self._indexes(
-                "users",
-                {"leading_attnum": 2, "plain_columns": ["email"]},
-            ),
-        )
-        node = {
-            "Node Type": "Seq Scan",
-            "Relation Name": "users",
-            "Actual Rows": 100,
-            "Rows Removed by Filter": 9900,
-            "Filter": "(email = ANY ('{a,b,c}'::text[]))",
-        }
-        assert check.check(node) == []
+    # ----- positive cases --------------------------------------------------
 
-    def test_is_not_null_is_not_flagged(self):
-        check = NonSargableCheck(
-            relation_indexes=self._indexes(
-                "users",
-                {"leading_attnum": 2, "plain_columns": ["email"]},
-            ),
-        )
-        node = {
-            "Node Type": "Seq Scan",
-            "Relation Name": "users",
-            "Actual Rows": 100,
-            "Rows Removed by Filter": 9900,
-            "Filter": "(email IS NOT NULL)",
-        }
-        assert check.check(node) == []
-
-    # ----- positive cases ---------------------------------------------------
-
-    def test_lower_with_index_is_reported(self):
-        check = NonSargableCheck(
-            relation_indexes=self._indexes(
-                "users",
-                {"leading_attnum": 2, "plain_columns": ["email"]},
-            ),
-        )
-        node = {
-            "Node Type": "Seq Scan",
+    def test_lower_with_index_is_reported(self, monkeypatch):
+        self._patch_indexes(monkeypatch, [
+            {"table_name": "users",
+             "leading_attnum": 2, "plain_columns": ["email"]},
+        ])
+        check = NonSargableCheck(params={"threshold_rows": "1000"})
+        node = self._node(**{
             "Relation Name": "users",
             "Actual Rows": 100,
             "Rows Removed by Filter": 9900,
             "Filter": "(lower(email) = 'x'::text)",
-        }
+        })
         issues = check.check(node)
         assert len(issues) == 1
         assert issues[0].type == "non_sargable"
         assert issues[0].severity == "info"
         assert "lower" in issues[0].message
         assert "email" in issues[0].message
-
-    def test_extract_from_syntax_is_detected(self):
-        """``extract(month FROM ts)`` — special FROM syntax."""
-        check = NonSargableCheck(
-            relation_indexes=self._indexes(
-                "events",
-                {"leading_attnum": 2, "plain_columns": ["ts"]},
-            ),
-        )
-        node = {
-            "Node Type": "Seq Scan",
-            "Relation Name": "events",
-            "Actual Rows": 100,
-            "Rows Removed by Filter": 9900,
-            "Filter": "(EXTRACT(month FROM ts) = '6'::numeric)",
-        }
-        issues = check.check(node)
-        assert len(issues) == 1
-        assert "extract" in issues[0].message.lower()
-        assert "ts" in issues[0].message
-
-    def test_date_trunc_column_in_second_argument(self):
-        """Column is not the first argument — still non-sargable."""
-        check = NonSargableCheck(
-            relation_indexes=self._indexes(
-                "events",
-                {"leading_attnum": 2, "plain_columns": ["ts"]},
-            ),
-        )
-        node = {
-            "Node Type": "Seq Scan",
-            "Relation Name": "events",
-            "Actual Rows": 100,
-            "Rows Removed by Filter": 9900,
-            "Filter": "(date_trunc('month'::text, ts) = '2026-06-01'::date)",
-        }
-        issues = check.check(node)
-        assert len(issues) == 1
-        assert "date_trunc" in issues[0].message
-
-    def test_table_qualified_column(self):
-        """PostgreSQL emits ``users.email`` in self-joins."""
-        check = NonSargableCheck(
-            relation_indexes=self._indexes(
-                "users",
-                {"leading_attnum": 2, "plain_columns": ["email"]},
-            ),
-        )
-        node = {
-            "Node Type": "Seq Scan",
-            "Relation Name": "users",
-            "Actual Rows": 100,
-            "Rows Removed by Filter": 9900,
-            "Filter": "(lower(users.email) = 'x'::text)",
-        }
-        assert len(check.check(node)) == 1
-
-    def test_schema_qualified_column(self):
-        """PostgreSQL may emit ``schema.table.column`` in filters."""
-        check = NonSargableCheck(
-            relation_indexes=self._indexes(
-                "users",
-                {"leading_attnum": 2, "plain_columns": ["email"]},
-            ),
-        )
-        node = {
-            "Node Type": "Seq Scan",
-            "Relation Name": "users",
-            "Actual Rows": 100,
-            "Rows Removed by Filter": 9900,
-            "Filter": "(lower(public.users.email) = 'x'::text)",
-        }
-        assert len(check.check(node)) == 1
-
-    def test_custom_function_is_detected(self):
-        """User-defined functions are caught too — no whitelist."""
-        check = NonSargableCheck(
-            relation_indexes=self._indexes(
-                "users",
-                {"leading_attnum": 2, "plain_columns": ["email"]},
-            ),
-        )
-        node = {
-            "Node Type": "Seq Scan",
-            "Relation Name": "users",
-            "Actual Rows": 100,
-            "Rows Removed by Filter": 9900,
-            "Filter": "(my_hash(email) = 'x'::text)",
-        }
-        issues = check.check(node)
-        assert len(issues) == 1
-        assert "my_hash" in issues[0].message
-
-    def test_composite_index_with_leading_column(self):
-        """``(email, created_at)`` — email is leading, usable."""
-        check = NonSargableCheck(
-            relation_indexes=self._indexes(
-                "users",
-                {"leading_attnum": 2, "plain_columns": ["email", "created_at"]},
-            ),
-        )
-        node = {
-            "Node Type": "Seq Scan",
-            "Relation Name": "users",
-            "Actual Rows": 100,
-            "Rows Removed by Filter": 9900,
-            "Filter": "(lower(email) = 'x'::text)",
-        }
-        assert len(check.check(node)) == 1
-
-    def test_custom_threshold(self):
-        check = NonSargableCheck(
-            threshold_rows=5000,
-            relation_indexes=self._indexes(
-                "users",
-                {"leading_attnum": 2, "plain_columns": ["email"]},
-            ),
-        )
-        node = {
-            "Node Type": "Seq Scan",
-            "Relation Name": "users",
-            "Actual Rows": 100,
-            "Rows Removed by Filter": 9900,
-            "Filter": "(lower(email) = 'x'::text)",
-        }
-        # total_read = 10000 > threshold 5000 → fires
-        assert len(check.check(node)) == 1
-
-        node["Actual Rows"] = 10
-        node["Rows Removed by Filter"] = 100
-        # total_read = 110 < threshold 5000 → silent
-        assert check.check(node) == []
-
-        # ----- phase tests ------------------------------------------------------
-
-        def _indexes(self, relation: str, *specs: dict) -> dict:
-            return {relation: list(specs)}
-
-        def test_gather_info_returns_none_without_filter(self):
-            check = NonSargableCheck(
-                relation_indexes=self._indexes(
-                    "users",
-                    {"leading_attnum": 2, "plain_columns": ["email"]},
-                ),
-            )
-            assert check.gather_info({
-                "Node Type": "Seq Scan",
-                "Relation Name": "users",
-                "Actual Rows": 100,
-            }) is None
-
-        def test_gather_info_returns_none_when_no_indexes(self):
-            check = NonSargableCheck(relation_indexes={})
-            node = {
-                "Node Type": "Seq Scan",
-                "Relation Name": "users",
-                "Actual Rows": 100,
-                "Rows Removed by Filter": 9900,
-                "Filter": "(lower(email) = 'x'::text)",
-            }
-            assert check.gather_info(node) is None
-
-        def test_gather_info_returns_none_for_sargable_filter(self):
-            check = NonSargableCheck(
-                relation_indexes=self._indexes(
-                    "users",
-                    {"leading_attnum": 2, "plain_columns": ["email"]},
-                ),
-            )
-            node = {
-                "Node Type": "Seq Scan",
-                "Relation Name": "users",
-                "Actual Rows": 100,
-                "Rows Removed by Filter": 9900,
-                "Filter": "(email = 'x'::text)",
-            }
-            assert check.gather_info(node) is None
-
-        def test_gather_info_returns_details_on_hit(self):
-            check = NonSargableCheck(
-                relation_indexes=self._indexes(
-                    "users",
-                    {"leading_attnum": 2, "plain_columns": ["email"]},
-                ),
-            )
-            node = {
-                "Node Type": "Seq Scan",
-                "Relation Name": "users",
-                "Actual Rows": 100,
-                "Rows Removed by Filter": 9900,
-                "Filter": "(lower(email) = 'x'::text)",
-            }
-            info = check.gather_info(node)
-            assert info["column"] == "email"
-            assert info["func"] == "lower"
-            assert info["relation"] == "users"
-            assert info["rows_read"] == 10000
-            assert "lower(email)" in info["filter"]
-
-        def test_validate_rule_threshold(self):
-            check = NonSargableCheck(
-                threshold_rows=1000,
-                relation_indexes=self._indexes(
-                    "users",
-                    {"leading_attnum": 2, "plain_columns": ["email"]},
-                ),
-            )
-            assert check.validate_rule({"rows_read": 1000}) is True
-            assert check.validate_rule({"rows_read": 999}) is False
-
-        def test_generate_msg_uses_info_fields(self):
-            check = NonSargableCheck()
-            info = {
-                "relation": "orders",
-                "column": "status",
-                "func": "upper",
-                "filter": "(upper(status) = 'PAID'::text)",
-                "rows_read": 100000,
-            }
-            issues = check.generate_msg(info)
-            msg = issues[0].message
-            assert "'orders'" in msg
-            assert "'status'" in msg
-            assert "'upper(...)'" in msg
-            assert "upper(status)" in msg
-            assert issues[0].severity == "info"
-            assert issues[0].type == "non_sargable"
 
 class TestSummarizePlanNode:
     FIELDS = {

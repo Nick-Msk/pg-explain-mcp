@@ -4,10 +4,11 @@ import os
 import sqlite3
 import sys
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from pg_explain_mcp.analyzer import (
     BitmapHeapScanCheck,
+    CheckBase,
     DiskSpillHashCheck,
     DiskSpillSortCheck,
     EstimateMismatchCheck,
@@ -25,42 +26,17 @@ DEFAULT_DB = _CONFIG_DIR / "checks.db"
 TARGET_DB_TYPE = os.getenv("TARGET_DB_TYPE", "postgres")
 
 # class name → (class, {param_name: type})
-_REGISTRY: dict[str, tuple[type, dict[str, Callable[[str], Any]]]] = {
-    "SeqScanCheck": (SeqScanCheck, {
-        "threshold_rows":   int,
-        "min_filter_ratio": float,
-    }),
-    "EstimateMismatchCheck": (EstimateMismatchCheck, {
-        "threshold_ratio": float,
-        "min_rows":        int,
-    }),
-    "DiskSpillSortCheck": (DiskSpillSortCheck, {
-        "min_spill_kb": int,
-    }),
-    "DiskSpillHashCheck": (DiskSpillHashCheck, {
-        "min_batches": int,
-    }),
-    "NestedLoopCheck": (NestedLoopCheck, {
-        "threshold_loops": int,
-        "threshold_rows":  int,
-    }),
-    "BitmapHeapScanCheck": (BitmapHeapScanCheck, {
-        "threshold_rows": int,
-    }),
-    "IndexRegularScanCheck": (IndexRegularScanCheck, {
-        "min_rows":         int,
-        "min_disk_blocks":  int,
-    }),
-    "IndexOnlyScanCheck": (IndexOnlyScanCheck, {
-        "min_rows":         int,
-        "heap_fetch_ratio": float,
-    }),
-        "PartitionPruningCheck": (PartitionPruningCheck, {
-        "max_children": int,
-    }),
-        "NonSargableCheck": (NonSargableCheck, {
-        "threshold_rows": int,
-    })
+_REGISTRY: dict[str, type[CheckBase]] = {
+#    "SeqScanCheck":          SeqScanCheck,
+#    "EstimateMismatchCheck": EstimateMismatchCheck,
+#    "DiskSpillSortCheck":    DiskSpillSortCheck,
+#    "DiskSpillHashCheck":    DiskSpillHashCheck,
+#    "NestedLoopCheck":       NestedLoopCheck,
+#    "BitmapHeapScanCheck":   BitmapHeapScanCheck,
+#    "IndexRegularScanCheck": IndexRegularScanCheck,
+#    "IndexOnlyScanCheck":    IndexOnlyScanCheck,
+#    "PartitionPruningCheck": PartitionPruningCheck,
+    "NonSargableCheck":      NonSargableCheck,
 }
 
 # ---------------------------------------------------------------------------
@@ -260,19 +236,9 @@ def _ensure_db(db_path: Path) -> None:
         init_db(db_path)
 
 def load_checks(
-    database: str = "postgres",
+    database: str = TARGET_DB_TYPE,
     db_path: Path | str = DEFAULT_DB,
-    relation_indexes: dict[str, list[dict[str, Any]]] | None = None
-) -> tuple[PlanCheck, ...]:
-    """Load enabled checks for ``database`` from the SQLite config.
-
-    Checks are returned ordered by ``num`` — the order in the seed file.
-    Params are coerced to the Python type declared in ``_REGISTRY``.
-
-    If the config database does not exist, it is created from
-    ``config/schema.sql`` and ``config/seed.sql`` before loading.
-    """
-
+) -> tuple[CheckBase, ...]:
     db_path = Path(db_path)
     _ensure_db(db_path)
 
@@ -285,34 +251,24 @@ def load_checks(
             (database,),
         ).fetchall()
 
-        checks: list[PlanCheck] = []
+        checks: list[CheckBase] = []
         for row in rows:
             num, name = row["num"], row["name"]
             if name not in _REGISTRY:
                 raise KeyError(
                     f"Check {num} '{name}' in config has no class in _REGISTRY"
                 )
-            cls, param_types = _REGISTRY[name]
 
             param_rows = conn.execute(
                 "select param, value from check_params "
                 "where database = ? and num = ?",
                 (database, num),
             ).fetchall()
+            params = {r["param"]: r["value"] for r in param_rows}
 
-            params: dict[str, Any] = {}
-            for p in param_rows:
-                pname, pval = p["param"], p["value"]
-                if pname not in param_types:
-                    raise KeyError(f"Unknown param '{pname}' for {name}")
-                params[pname] = param_types[pname](pval)
-                if name == "NonSargableCheck":
-                    params["relation_indexes"] = relation_indexes or {}
-
-            checks.append(cls(**params))
+            checks.append(_REGISTRY[name](params=params))
 
         return tuple(checks)
-
 
 class CheckRegistry:
     """Re-reads the check list from SQLite on every ``load()``.

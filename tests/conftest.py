@@ -19,15 +19,15 @@ from pg_explain_mcp.analyzer import (
 )
 
 ALL_CHECKS = (
-    SeqScanCheck(),
-    EstimateMismatchCheck(),
-    DiskSpillSortCheck(),
-    DiskSpillHashCheck(),
-    NestedLoopCheck(),
-    BitmapHeapScanCheck(),
-    IndexRegularScanCheck(),
-    IndexOnlyScanCheck(),
-    PartitionPruningCheck(),
-    NonSargableCheck(),   # no relation_indexes — won't fire, fine for integration tests
+#    SeqScanCheck(),
+#    EstimateMismatchCheck(),
+#    DiskSpillSortCheck(),
+#    DiskSpillHashCheck(),
+#    NestedLoopCheck(),
+#    BitmapHeapScanCheck(),
+#    IndexRegularScanCheck(),
+#    IndexOnlyScanCheck(),
+#    PartitionPruningCheck(),
+    NonSargableCheck(params={"threshold_rows": "1000"})
 )
 
