@@ -25,6 +25,8 @@ from pg_explain_mcp.config import (
     show_params as show_params_impl,
 )
 from pg_explain_mcp.db import (
+    RelationNotFoundError,
+    StatisticsNotAvailableError,
     explain_query,
     get_indexes,
     get_params,
@@ -252,6 +254,8 @@ def list_relation_info(relation: str | None = None) -> str:
     try:
         rows = get_relation_info(relation)
         return _format_relation_info(rows)
+    except RelationNotFoundError as e:
+        return f"Relation '{e}' not found."
     except Exception as e:
         return f"Error: {e}"
 
@@ -270,6 +274,10 @@ def list_relation_stats(relation: str | None = None) -> str:
     try:
         rows = get_relation_stat_info(relation)
         return _format_relation_stats(rows)
+    except RelationNotFoundError as e:
+        return f"Relation '{e}' not found."
+    except StatisticsNotAvailableError as e:
+        return f"Statistics for '{e.relation}' not available: {e.reason}."
     except Exception as e:
         return f"Error: {e}"
 

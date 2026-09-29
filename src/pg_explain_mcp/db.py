@@ -8,6 +8,61 @@ import psycopg
 from psycopg.rows import dict_row
 
 
+class RelationNotFoundError(LookupError):
+    """Raised when a relation filter matches no user relation."""
+
+
+class StatisticsNotAvailableError(LookupError):
+    """Raised when a relation exists but has no runtime statistics.
+
+    Typically means the relation is a view, materialized view, or
+    foreign table — ``pg_stat_user_tables`` only tracks real tables.
+    """
+
+    def __init__(self, relation: str, reason: str) -> None:
+        super().__init__(relation)
+        self.relation = relation
+        self.reason = reason
+
+
+_RELKIND_REASONS: dict[str, str] = {
+    "v": "relation is a view, not a table",
+    "m": "relation is a materialized view, not a table",
+    "f": "relation is a foreign table, not a table",
+    "S": "relation is a sequence",
+    "i": "relation is an index",
+}
+
+
+def _get_relkind(relation: str) -> str | None:
+    """Return ``pg_class.relkind`` for the relation, or None if not found.
+
+    Accepts ``table`` or ``schema.table``.
+    """
+    if "." in relation:
+        schema, _, name = relation.partition(".")
+    else:
+        schema, name = None, relation
+
+    query = """
+        select c.relkind
+        from pg_class c
+        join pg_namespace ns on ns.oid = c.relnamespace
+        where c.relname = %(name)s
+          and ns.nspname not in ('pg_catalog', 'information_schema')
+    """
+    params: dict[str, Any] = {"name": name}
+    if schema:
+        query += " and ns.nspname = %(schema)s"
+        params["schema"] = schema
+    query += " limit 1"
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, params)
+            row = cur.fetchone()
+            return row["relkind"] if row else None
+
 def _get_dsn() -> str:
     """Build a DSN string from environment variables."""
     host = os.getenv("PG_HOST", "localhost")
@@ -244,7 +299,11 @@ def get_relation_info(relation: str | None = None) -> list[dict[str, Any]]:
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(query, params)
-            return cur.fetchall()
+            rows = cur.fetchall()
+
+    if relation and not rows:
+        raise RelationNotFoundError(relation)
+    return rows
 
 
 def get_relation_stat_info(
@@ -307,5 +366,24 @@ def get_relation_stat_info(
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(query, params)
-            return cur.fetchall()
+            rows = cur.fetchall()
+
+    if relation and not rows:
+        relkind = _get_relkind(relation)
+        if relkind is None:
+            raise RelationNotFoundError(relation)
+        if relkind in ("r", "p"):
+            # Table exists but pg_stat_user_tables returned nothing —
+            # the stats collector may be disabled or lagging.
+            raise StatisticsNotAvailableError(
+                relation,
+                "no row in pg_stat_user_tables "
+                "(stats collector may be disabled or lagging)",
+            )
+        reason = _RELKIND_REASONS.get(
+            relkind, f"unsupported relkind '{relkind}'"
+        )
+        raise StatisticsNotAvailableError(relation, reason)
+
+    return rows
 
