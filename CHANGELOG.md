@@ -7,6 +7,121 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`PlanNode` and the `new_*` migration layer.**
+  `parse_plan` now returns a linked tree of `PlanNode` objects with
+  direct `parent` / `children` references — the Python equivalent of
+  `struct PlanNode` in C. Parallel helpers `new_parse_plan`,
+  `new_plan_to_list`, `new_format_plan_tree`, `new_analyze_plan`
+  exist alongside the legacy API; the old `parse_plan`,
+  `analyze_plan`, `format_plan_tree`, `PlanCheckBase` stay until
+  every check migrates, then get removed.
+
+- **`ParsedPlanCheckBase`.** New base class for checks that receive
+  a `PlanNode` and can navigate the whole tree. Same three-phase
+  shape as the legacy base: `gather_info` → `validate_rule` →
+  `generate_msg`. `gather_info` gets a `PlanNode` instead of a
+  dict and a `parent_type` string.
+
+- **`CheckBase` and per-check `PARAMS`.** Every check declares
+  `PARAMS = {name: type}`. Values come from `check_params` as
+  `dict[str, str]` and are coerced by `CheckBase.__init__`. A
+  missing parameter raises `ValueError` at construction time.
+  `_REGISTRY` is now a flat `dict[str, type[CheckBase]]` — no
+  per-check type table.
+
+- **Three new MCP tools:**
+  - `list_relation_info` — `pg_class` metadata (sizes, row/page
+    counts, column/index counts, owner, persistence, tablespace,
+    comment).
+  - `list_relation_stats` — `pg_stat_user_tables` counters combined
+    with `pg_class` estimates (`reltuples`, `relpages`,
+    `relallvisible`).
+  - `list_column_stats` — per-column planner statistics from
+    `pg_stats`: `null_frac`, `avg_width`, `n_distinct`,
+    `correlation`, `most_common_vals`, `most_common_freqs`,
+    `histogram_bounds`.
+
+- **`field_config` in `plan_fields`.** The `enabled` column becomes
+  a three-state mode with a `CHECK (enabled in (0, 1, 999))`
+  constraint:
+  - `0` — hide the field (`Parallel Aware: false`, `Disabled:
+    false`, `Async Capable: false`).
+  - `1` — keep the field including zero values (`Heap Fetches`,
+    `Rows Removed by Filter`, `Shared Read Blocks`, `Temp Read
+    Blocks`, `Temp Written Blocks`).
+  - `999` — unknown: keep, drop numeric zeros (the default).
+  `new_plan_to_list` applies the policy and auto-derives `snake_case`
+  keys for fields not present in `plan_fields`; explicit `key`
+  overrides where a short name matters.
+
+- **`pg-explain-parse` CLI.** Runs EXPLAIN itself on a SQL query
+  (argument, file, or stdin), or parses a saved JSON plan via
+  `--plan`. Flags: `--json`, `--no-analyze`, `--no-buffers`,
+  `--all-fields`, `--marker-tabs N`.
+
+- **`pg-explain-config` CLI.** Console script for `--init` and
+  `--show`. Display modes for `plan_fields` are `[hide]` / `[keep]`
+  / `[auto]`, matching the three-state semantics.
+
+- **Node path.** Every parsed node carries a `path` field
+  (`0:0/1:0/2:1`) — the root-to-node route. `format_plan_tree`
+  prints the last segment only (`[4:1]`) with configurable tab
+  padding; depth is already visible from indentation.
+
+- **Per-check statistics integration.** `NonSargableCheck` loads
+  indexes lazily on first `gather_info` via `get_indexes()`; the
+  cache is a per-instance class-default attribute, no `__init__`
+  override. Other checks will follow the same pattern as they
+  migrate.
+
+### Changed
+
+- **`get_indexes` accepts `schema.table`.** Reuses the same
+  `_relation_filter` helper as `get_relation_info`, so a qualified
+  filter now matches instead of returning an empty list.
+
+- **`RelationNotFoundError` and `StatisticsNotAvailableError`.**
+  `get_relation_info` and `get_relation_stat_info` no longer return
+  an empty list for a missing relation. The first signals "does not
+  exist"; the second distinguishes "exists but is not a table"
+  (view, matview, foreign table, sequence, index). MCP tools render
+  the distinction.
+
+- **`new_analyze_plan` enriches issues with `with_context`.** Every
+  Issue from a `ParsedPlanCheckBase` check carries `depth` and
+  `parent_node` — the LLM can group child issues under their root
+  cause.
+
+- **`non_sargable` message includes the wrapped function name.**
+  "wraps 'email' in 'lower(...)'" instead of the generic "wraps
+  'email' in a function".
+
+### Fixed
+
+- **`get_indexes` on schema-qualified names** — the previous
+  `relname = 'schema.table'` comparison never matched. Now uses
+  the same `_relation_filter` helper as `get_relation_info`.
+
+- **`new_plan_to_list` auto-derives snake_case keys** for fields
+  missing from `plan_fields`, so output is no longer a mix of
+  `snake_case` and raw EXPLAIN names.
+
+- **`explain_tree` and `explain_tree_text` use the new pipeline.**
+  Both were still on the legacy `parse_plan` path and emitted raw
+  field names.
+
+- **`new_format_plan_tree` respects `field_config`.** Text output
+  no longer leaks `Parallel Aware: false` / `Disabled: false` /
+  `Async Capable: false`.
+
+- **`pg-explain-config --show` displays `[hide]/[keep]/[auto]`**
+  for `plan_fields` instead of collapsing `999` to `off`.
+
+- **`--init` is idempotent** — drops and rebuilds `checks.db`
+  instead of failing on UNIQUE violations.
+
 ## [0.4.0] — 2026-09-27
 
 ### Added

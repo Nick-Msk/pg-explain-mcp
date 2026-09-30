@@ -34,6 +34,17 @@ diagnosing query performance issues using execution plans.
   - `plan_nodes` — a compact plan tree with `actual_rows`,
     `heap_fetches`, `shared_read_blocks`, `sort_method`, `hash_batches`,
     `peak_memory_usage_kb`, `parallel_aware`, and other relevant fields.
+- `list_relation_info` — metadata from `pg_class` for a relation
+  (or all user relations): size, row/page counts, columns, indexes,
+  owner, persistence, tablespace.
+- `list_relation_stats` — runtime stats from `pg_stat_user_tables`
+  combined with `pg_class` estimates: scan counters, live/dead
+  tuples, vacuum/analyze timestamps.
+- `list_column_stats` — per-column planner statistics from `pg_stats`
+  for a given relation (optionally one column): `null_frac`,
+  `avg_width`, `n_distinct`, `correlation`, `most_common_vals`,
+  `most_common_freqs`, `histogram_bounds`. Call this before
+  speculating about why the planner mis-estimates a column.
 
 ## Workflow
 
@@ -49,6 +60,10 @@ diagnosing query performance issues using execution plans.
 4. **Ask before calling `set_checker_value` or
      `reset_checker_value`.** These tools write to the config database
      and affect all subsequent `explain` calls.
+5.    - Before concluding that a column estimate is wrong, call
+     `pg-explain.list_column_stats` to see the actual statistics.
+     `most_common_freqs` and `correlation` explain most
+     `estimate_mismatch` findings.
 
 ## Hard rules
 
