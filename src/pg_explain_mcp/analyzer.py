@@ -192,6 +192,10 @@ def new_parse_plan(plan_json: list[dict[str, Any]]) -> PlanNode | None:
 
     return build(plan_json[0].get("Plan", {}), None, 0, "", 0)
 
+def _auto_key(raw: str) -> str:
+    """Fallback snake_case key for fields not listed in plan_fields."""
+    return raw.lower().replace(" ", "_").replace("/", "_")
+
 def new_plan_to_list(
     root: PlanNode | None,
     field_config: dict[str, tuple[str, int]] | None = None,
@@ -223,7 +227,7 @@ def new_plan_to_list(
                     # Unknown field — treat as mode 999.
                     if _is_zero(value):
                         continue
-                    entry[raw] = value
+                    entry[_auto_key(raw)] = value
                 else:
                     key, mode = spec
                     if mode == _FIELD_HIDE:

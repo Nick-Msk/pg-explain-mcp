@@ -298,7 +298,7 @@ def explain(sql: str) -> str:
 
         config = _registry.load_field_config()
         tree = new_parse_plan(plan_json)
-        report["plan_nodes"] = new_plan_to_list(tree, field_policy=config)
+        report["plan_nodes"] = new_plan_to_list(tree, field_config=config)
 
         return json.dumps(report, indent=2, ensure_ascii=False)
     except ValueError as e:
