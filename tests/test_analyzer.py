@@ -196,6 +196,43 @@ class TestEstimateMismatchCheck:
         )
         assert self._check().check(scan) == []
 
+    def test_limit_two_levels_above(self):
+        """Limit -> Sort -> Seq Scan — ratio must be suppressed."""
+        limit = PlanNode(depth=0, path="0:0", fields={"Node Type": "Limit"})
+        sort = PlanNode(depth=1, path="0:0/1:0", parent=limit,
+                        fields={"Node Type": "Sort"})
+        scan = PlanNode(depth=2, path="0:0/1:0/2:0", parent=sort, fields={
+            "Node Type": "Seq Scan",
+            "Plan Rows": 395_833,
+            "Actual Rows": 3_389,
+        })
+        assert self._check().check(scan) == []
+
+    def test_limit_three_levels_above(self):
+        """Limit -> Gather Merge -> Sort -> Seq Scan (the real reproducer)."""
+        limit = PlanNode(depth=0, path="0:0", fields={"Node Type": "Limit"})
+        gm = PlanNode(depth=1, path="0:0/1:0", parent=limit,
+                      fields={"Node Type": "Gather Merge"})
+        sort = PlanNode(depth=2, path="0:0/1:0/2:0", parent=gm,
+                        fields={"Node Type": "Sort"})
+        scan = PlanNode(depth=3, path="0:0/1:0/2:0/3:0", parent=sort, fields={
+            "Node Type": "Seq Scan",
+            "Plan Rows": 395_833,
+            "Actual Rows": 3_389,
+        })
+        assert self._check().check(scan) == []
+
+    def test_no_limit_ancestor_still_fires(self):
+        """Sanity: without Limit above, the check still works."""
+        sort = PlanNode(depth=0, path="0:0", fields={"Node Type": "Sort"})
+        scan = PlanNode(depth=1, path="0:0/1:0", parent=sort, fields={
+            "Node Type": "Seq Scan",
+            "Plan Rows": 395_833,
+            "Actual Rows": 3_389,
+        })
+        issues = self._check().check(scan)
+        assert len(issues) == 1
+
 class TestDiskSpillSortCheck:
     def _check(self, min_spill_kb: int = 0) -> DiskSpillSortCheck:
         return DiskSpillSortCheck(params={

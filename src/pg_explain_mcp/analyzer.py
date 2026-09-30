@@ -513,7 +513,7 @@ class EstimateMismatchCheck(ParsedPlanCheckBase):
         # plan_rows under a Limit is the full-scan estimate, not the
         # truncated one — comparing it to actual yields a spurious
         # ratio.
-        if node.parent is not None and node.parent.node_type == "Limit":
+        if node.is_under("Limit"):
             return None
 
         planned = node.get("Plan Rows", 0)
