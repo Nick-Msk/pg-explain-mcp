@@ -35,6 +35,7 @@ from pg_explain_mcp.db import (
     get_indexes,
     get_params,
     get_relation_info,
+    get_relation_stat_column_info,
     get_relation_stat_info,
     get_schema,
 )
@@ -94,6 +95,31 @@ def _format_indexes(rows: list[dict[str, Any]]) -> str:
             f"{row['index_name']} [{kind}] ({cols_str})"
         )
     return "\n".join(lines)
+
+def _format_column_stats(rows: list[dict[str, Any]]) -> str:
+    if not rows:
+        return "No column statistics available."
+
+    lines: list[str] = []
+    for r in rows:
+        lines.append(
+            f"{r['schema_name']}.{r['table_name']}.{r['column_name']}"
+        )
+        lines.append(f"  null_frac:            {r['null_frac']}")
+        lines.append(f"  avg_width (bytes):    {r['avg_width']}")
+        lines.append(f"  n_distinct:           {r['n_distinct']}")
+        lines.append(f"  correlation:          {r['correlation']}")
+        if r["most_common_vals"]:
+            lines.append(f"  most_common_vals:     {r['most_common_vals']}")
+        if r["most_common_freqs"]:
+            lines.append(f"  most_common_freqs:    {r['most_common_freqs']}")
+        if r["histogram_bounds"]:
+            hb = r["histogram_bounds"]
+            if len(hb) > 120:
+                hb = hb[:117] + "..."
+            lines.append(f"  histogram_bounds:     {hb}")
+        lines.append("")
+    return "\n".join(lines).rstrip()
 
 def _human_bytes(n: int | None) -> str:
     if not n:
@@ -218,7 +244,6 @@ def _format_params(rows: list[dict[str, any]]) -> str:
         lines.append(f"{row['name']} = {value} ({row['source']})")
     return "\n".join(lines)
 
-
 @mcp.tool()
 def list_parameters(names: str | None = None) -> str:
     """Return PostgreSQL parameters relevant to plan analysis.
@@ -256,7 +281,6 @@ def list_relation_info(relation: str | None = None) -> str:
     except Exception as e:
         return f"Error: {e}"
 
-
 @mcp.tool()
 def list_relation_stats(relation: str | None = None) -> str:
     """Return runtime statistics for user tables.
@@ -275,6 +299,33 @@ def list_relation_stats(relation: str | None = None) -> str:
         return f"Relation '{e}' not found."
     except StatisticsNotAvailableError as e:
         return f"Statistics for '{e.relation}' not available: {e.reason}."
+    except Exception as e:
+        return f"Error: {e}"
+
+@mcp.tool()
+def list_column_stats(
+    relation: str,
+    column: str | None = None,
+) -> str:
+    """Return per-column planner statistics from pg_stats.
+
+    Args:
+        relation: ``table`` or ``schema.table``.
+        column: Optional column name. If omitted, returns statistics
+            for every column that has any.
+
+    Columns without statistics (never analyzed, all-NULL, or
+    unsupported type) do not appear in pg_stats and are not returned.
+    """
+    try:
+        rows = get_relation_stat_column_info(relation, column)
+        return _format_column_stats(rows)
+    except RelationNotFoundError as e:
+        return f"Relation '{e}' not found."
+    except StatisticsNotAvailableError as e:
+        return (
+            f"Statistics for '{e.relation}' not available: {e.reason}."
+        )
     except Exception as e:
         return f"Error: {e}"
 

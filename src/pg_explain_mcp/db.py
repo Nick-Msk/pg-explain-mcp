@@ -395,3 +395,98 @@ def get_relation_stat_info(
 
     return rows
 
+def get_relation_stat_column_info(
+    relation: str,
+    col: str | None = None,
+) -> list[dict[str, Any]]:
+    """Return per-column planner statistics from ``pg_stats``.
+
+    ``pg_stats`` exposes ``pg_statistic`` in human-readable form:
+    ``null_frac``, ``avg_width``, ``n_distinct``,
+    ``most_common_vals``, ``most_common_freqs``,
+    ``histogram_bounds``, ``correlation``.
+
+    Args:
+        relation: ``table`` or ``schema.table``.
+        col: Optional column name. If ``None``, returns statistics for
+            every column that has any.
+
+    Returns:
+        One dict per column that has statistics. Columns without stats
+        (never analyzed, all-NULL, or unsupported type) do not appear
+        in ``pg_stats`` and will not be in the result.
+
+    Raises:
+        RelationNotFoundError: relation does not exist.
+    """
+    # Split ``schema.table`` into parts.
+    if "." in relation:
+        schema, _, name = relation.partition(".")
+    else:
+        schema, name = None, relation
+
+    # Confirm the relation exists; capture canonical schema.table.
+    where = [
+        "c.relname = %(name)s",
+        "ns.nspname NOT IN ('pg_catalog', 'information_schema')",
+    ]
+    params: dict[str, Any] = {"name": name}
+    if schema:
+        where.append("ns.nspname = %(schema)s")
+        params["schema"] = schema
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                    select ns.nspname, c.relname, c.relkind
+                    from pg_class c
+                    join pg_namespace ns on ns.oid = c.relnamespace
+                    where {' and '.join(where)}
+                    limit 1
+                """,
+                params,
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise RelationNotFoundError(relation)
+
+            schema_name = row["nspname"]
+            table_name = row["relname"]
+            relkind = row["relkind"]
+
+    # pg_stats only covers relations with storage.
+    if relkind not in ("r", "p", "m"):
+        reason = _RELKIND_REASONS.get(
+            relkind, f"unsupported relkind '{relkind}'"
+        )
+        raise StatisticsNotAvailableError(relation, reason)
+
+    # Query pg_stats for the (optionally filtered) column.
+    where = ["schemaname = %(schema)s", "tablename = %(table)s"]
+    params = {"schema": schema_name, "table": table_name}
+    if col:
+        where.append("attname = %(col)s")
+        params["col"] = col
+
+    query = f"""
+        SELECT
+            schemaname          AS schema_name,
+            tablename           AS table_name,
+            attname             AS column_name,
+            null_frac,
+            avg_width,
+            n_distinct,
+            correlation,
+            most_common_vals::text       AS most_common_vals,
+            most_common_freqs::text      AS most_common_freqs,
+            histogram_bounds::text       AS histogram_bounds
+        FROM pg_stats
+        WHERE {' AND '.join(where)}
+        ORDER BY attname
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, params)
+            return cur.fetchall()
+
