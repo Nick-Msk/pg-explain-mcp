@@ -8,6 +8,7 @@ from mcp.server.fastmcp import FastMCP
 from pg_explain_mcp.analyzer import (
     #analyze_plan,
     new_analyze_plan,
+    new_format_plan_tree,
     new_plan_to_list,
     new_parse_plan,
     filtered_parse_plan,
@@ -328,8 +329,11 @@ def explain_tree(sql: str) -> str:
     try:
         raw = explain_query(sql, analyze=True, buffers=True)
         plan_json = raw["QUERY PLAN"]
-        policy = _registry.load_field_policy()
-        nodes = filtered_parse_plan(plan_json, field_policy=policy)
+
+        config = _registry.load_field_config()
+        tree = new_parse_plan(plan_json)
+        nodes = new_plan_to_list(tree, field_config=config)
+
         return json.dumps(nodes, indent=2, ensure_ascii=False)
     except ValueError as e:
         return f"Validation error: {e}"
@@ -351,9 +355,10 @@ def explain_tree_text(sql: str) -> str:
     try:
         raw = explain_query(sql, analyze=True, buffers=True)
         plan_json = raw["QUERY PLAN"]
-        policy = _registry.load_field_policy()
-        nodes = filtered_parse_plan(plan_json, field_policy=policy)
-        return format_plan_tree(nodes)
+
+        tree = new_parse_plan(plan_json)
+        config = _registry.load_field_config()
+        return new_format_plan_tree(tree, field_config=config)
     except ValueError as e:
         return f"Validation error: {e}"
     except Exception as e:

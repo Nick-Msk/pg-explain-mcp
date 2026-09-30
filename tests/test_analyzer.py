@@ -210,7 +210,11 @@ def test_missing_param_raises(self):
 
 class TestDiskSpillSortCheck:
     def _check(self, min_spill_kb: int = 0) -> DiskSpillSortCheck:
-        return DiskSpillSortCheck(params={"min_spill_kb": str(min_spill_kb)})
+        return DiskSpillSortCheck(params={
+            "min_spill_kb":    str(min_spill_kb),
+            "min_work_mem_mb": "32",
+            "headroom_ratio":  "1.1",
+        })
 
     def test_in_memory_sort_is_ok(self):
         node = PlanNode(depth=0, path="0:0", fields={

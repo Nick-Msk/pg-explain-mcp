@@ -249,12 +249,15 @@ def new_plan_to_list(
 
 def new_format_plan_tree(
     root: PlanNode | None,
+    field_config: dict[str, tuple[str, int]] | None = None,
     marker_tabs: int = 5,
 ) -> str:
     """Render a PlanNode tree as indented text.
 
     Same visual layout as ``format_plan_tree``, but takes a PlanNode
     root instead of a flat list.
+     Applies the same field policy as ``new_plan_to_list``:
+    0 = hide, 1 = keep zeros, 999 = drop zeros; None = keep all.
     """
     if root is None:
         return "(empty plan)"
@@ -266,8 +269,19 @@ def new_format_plan_tree(
         base = "  " * node.depth
         marker = node.path.rsplit("/", 1)[-1]
         lines.append(f"{base}{node.node_type}{pad}[{marker}]")
-        for key, value in node.fields.items():
-            lines.append(f"{base}  {key}: {value}")
+        for raw, value in node.fields.items():
+            if field_config is not None:
+                spec = field_config.get(raw)
+                if spec is None:
+                    if _is_zero(value):
+                        continue
+                else:
+                    key, mode = spec
+                    if mode == _FIELD_HIDE:
+                        continue
+                    if mode != _FIELD_KEEP_ZEROS and _is_zero(value):
+                        continue
+            lines.append(f"{base}  {raw}: {value}")
         for child in node.children:
             render(child)
 
