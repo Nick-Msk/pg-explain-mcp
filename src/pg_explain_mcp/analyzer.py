@@ -822,7 +822,7 @@ class BitmapHeapScanCheck(ParsedPlanCheckBase):
             )
         ]
 
-class IndexOnlyScanCheck(PlanCheckBase):
+class IndexOnlyScanCheck(ParsedPlanCheckBase):
     """Index Only Scan with a stale visibility map.
 
     The planner chose an Index Only Scan because the index covers the
@@ -830,6 +830,8 @@ class IndexOnlyScanCheck(PlanCheckBase):
     trust the index to determine tuple visibility, so it falls back
     to the heap for each row. The result is worse than a plain Index
     Scan: index traversal plus random heap reads.
+
+    Typical cause: heavy UPDATE/DELETE churn without VACUUM.
 
     ``gather_info`` returns:
 
@@ -846,27 +848,20 @@ class IndexOnlyScanCheck(PlanCheckBase):
 
     name = "IndexOnlyScanCheck"
     type = "index_only_scan_stale_vm"
+    PARAMS = {
+        "min_rows":         int,
+        "heap_fetch_ratio": float,
+    }
 
-    def __init__(
-        self,
-        min_rows: int = 1000,
-        heap_fetch_ratio: float = 0.10,
-        **_ignored: Any,
-    ) -> None:
-        self.min_rows = min_rows
-        self.heap_fetch_ratio = heap_fetch_ratio
-
-    def gather_info(
-        self,
-        node: dict[str, Any],
-        parent_type: str = ""
-    ) -> dict[str, Any] | None:
-        if node.get("Node Type") != "Index Only Scan":
+    def gather_info(self, node: PlanNode) -> dict[str, Any] | None:
+        if node.node_type != "Index Only Scan":
             return None
+
         heap_fetches = node.get("Heap Fetches", 0)
         actual_rows = node.get("Actual Rows", 0)
         if heap_fetches <= 0 or actual_rows <= 0:
             return None
+
         return {
             "heap_fetches": heap_fetches,
             "actual_rows": actual_rows,
@@ -876,11 +871,9 @@ class IndexOnlyScanCheck(PlanCheckBase):
         }
 
     def validate_rule(self, info: dict[str, Any]) -> bool:
-        if info["actual_rows"] < self.min_rows:
+        if info["actual_rows"] < self.params["min_rows"]:
             return False
-        if info["heap_fetches"] == 0:
-            return False
-        return info["ratio"] >= self.heap_fetch_ratio
+        return info["ratio"] >= self.params["heap_fetch_ratio"]
 
     def generate_msg(self, info: dict[str, Any]) -> list[Issue]:
         pct = info["ratio"] * 100

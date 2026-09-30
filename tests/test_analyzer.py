@@ -426,85 +426,80 @@ class TestBitmapHeapScanCheck:
         assert "?" in issues[0].message
 
 class TestIndexOnlyScanCheck:
-    def test_few_heap_fetches_is_ok(self):
-        check = IndexOnlyScanCheck()
-        node = {
-            "Node Type": "Index Only Scan",
+    DEFAULTS = {"min_rows": "100", "heap_fetch_ratio": "0.10"}
+
+    def _check(self, **overrides) -> IndexOnlyScanCheck:
+        return IndexOnlyScanCheck(params={**self.DEFAULTS, **overrides})
+
+    def _node(self, **fields) -> PlanNode:
+        return PlanNode(depth=0, path="0:0",
+                        fields={"Node Type": "Index Only Scan", **fields})
+
+    def test_zero_heap_fetches_is_ok(self):
+        node = self._node(**{
             "Index Name": "idx_a",
             "Relation Name": "t",
             "Actual Rows": 10_000,
-            "Heap Fetches": 50,
-        }
-        assert check.check(node) == []
+            "Heap Fetches": 0,
+        })
+        assert self._check().check(node) == []
 
     def test_below_min_rows_is_ok(self):
-        check = IndexOnlyScanCheck()
-        node = {
-            "Node Type": "Index Only Scan",
-            "Actual Rows": 50,           # < 1000
-            "Heap Fetches": 45
-        }
-        assert check.check(node) == []
+        node = self._node(**{
+            "Actual Rows": 50,
+            "Heap Fetches": 45,
+        })
+        assert self._check().check(node) == []
+
+    def test_low_fetch_ratio_is_ok(self):
+        """10k rows, 500 fetches → ratio 0.05 < 0.10 → silent."""
+        node = self._node(**{
+            "Actual Rows": 10_000,
+            "Heap Fetches": 500,
+        })
+        assert self._check().check(node) == []
 
     def test_stale_vm_is_reported(self):
-        check = IndexOnlyScanCheck(min_rows=100, heap_fetch_ratio=0.10)
-        node = {
-            "Node Type": "Index Only Scan",
+        node = self._node(**{
             "Index Name": "idx_orders_status",
             "Relation Name": "orders",
             "Actual Rows": 50_000,
             "Heap Fetches": 45_000,
-        }
-        issues = check.check(node)
+        })
+        issues = self._check().check(node)
         assert len(issues) == 1
         assert issues[0].type == "index_only_scan_stale_vm"
         assert issues[0].severity == "warning"
+        assert "idx_orders_status" in issues[0].message
+        assert "VACUUM" in issues[0].message
+        assert "45000 heap fetches" in issues[0].message
+
+    def test_ratio_above_one_is_reported(self):
+        """440 rows, 594 fetches → ratio 1.35."""
+        node = self._node(**{
+            "Index Name": "idx_x",
+            "Relation Name": "t",
+            "Actual Rows": 440,
+            "Heap Fetches": 594,
+        })
+        issues = self._check().check(node)
+        assert len(issues) == 1
+        assert "135.0%" in issues[0].message
 
     def test_index_scan_is_ignored(self):
-        """Regular Index Scan is not this check's business."""
-        check = IndexOnlyScanCheck()
-        node = {
+        node = PlanNode(depth=0, path="0:0", fields={
             "Node Type": "Index Scan",
             "Actual Rows": 20_000,
-            "Shared Read Blocks": 8000,
-        }
-        assert check.check(node) == []
+            "Shared Read Blocks": 8_000,
+        })
+        assert self._check().check(node) == []
 
-    def test_gather_info_returns_none_without_heap_fetches(self):
-        check = IndexOnlyScanCheck()
-        node = {"Node Type": "Index Only Scan", "Actual Rows": 1000}
-        assert check.gather_info(node) is None
-
-    def test_validate_rule_threshold(self):
-        check = IndexOnlyScanCheck(min_rows=100, heap_fetch_ratio=0.5)
-
-        # Both conditions met — fires
-        assert check.validate_rule({
-            "actual_rows": 100,
-            "heap_fetches": 100,
-            "ratio": 0.5,
-        }) is True
-
-        # Below min_rows — silent
-        assert check.validate_rule({
-            "actual_rows": 99,
-            "heap_fetches": 999,
-            "ratio": 0.9,
-        }) is False
-
-        # Ratio too low — silent
-        assert check.validate_rule({
-            "actual_rows": 1000,
-            "heap_fetches": 100,
-        "ratio": 0.4,
-        }) is False
-
-        # Zero heap fetches — silent, regardless of ratio
-        assert check.validate_rule({
-            "actual_rows": 1000,
-            "heap_fetches": 0,
-            "ratio": 0.0,
-        }) is False
+    def test_zero_actual_rows_is_ignored(self):
+        node = self._node(**{
+            "Actual Rows": 0,
+            "Heap Fetches": 500,
+        })
+        assert self._check().check(node) == []
 
 class TestIndexRegularScanCheck:
     def test_few_blocks_is_ok(self):

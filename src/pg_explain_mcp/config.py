@@ -34,7 +34,7 @@ _REGISTRY: dict[str, type[CheckBase]] = {
     "NestedLoopCheck":       NestedLoopCheck,
     "BitmapHeapScanCheck":   BitmapHeapScanCheck,
 #    "IndexRegularScanCheck": IndexRegularScanCheck,
-#    "IndexOnlyScanCheck":    IndexOnlyScanCheck,
+    "IndexOnlyScanCheck":    IndexOnlyScanCheck,
 #    "PartitionPruningCheck": PartitionPruningCheck,
     "NonSargableCheck":      NonSargableCheck,
 }
