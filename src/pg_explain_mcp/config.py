@@ -107,7 +107,7 @@ def set_param(
     checker: str,
     param: str,
     value: str,
-    database: str = "postgres",
+    database: str = TARGET_DB_TYPE,
     db_path: Path | str = DEFAULT_DB,
 ) -> dict[str, Any]:
     """Set a param's current value. Validates the type first.
@@ -285,14 +285,10 @@ class CheckRegistry:
     def target(self) -> str:
         return TARGET_DB_TYPE
 
-    def load(
-        self,
-        relation_indexes: dict[str, list[dict[str, Any]]] | None = None,
-    ) -> tuple[PlanCheck, ...]:
+    def load(self) -> tuple[CheckBase, ...]:
         return load_checks(
             TARGET_DB_TYPE,
-            self._db_path,
-            relation_indexes=relation_indexes,
+            self._db_path
         )
 
     def load_fields(self) -> dict[str, str]:

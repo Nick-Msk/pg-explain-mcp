@@ -8,6 +8,8 @@ from mcp.server.fastmcp import FastMCP
 from pg_explain_mcp.analyzer import (
     #analyze_plan,
     new_analyze_plan,
+    new_plan_to_list,
+    new_parse_plan,
     filtered_parse_plan,
     format_plan_tree,
     summarize_plan_node,
@@ -294,7 +296,9 @@ def explain(sql: str) -> str:
         #report = analyze_plan(plan_json, checks=checks)
         report = new_analyze_plan(plan_json, checks=checks)
 
-        report["plan_nodes"] = summarize_plan_node(plan_json, checks=checks)
+        policy = _registry.load_field_policy()
+        tree = new_parse_plan(plan_json)
+        report["plan_nodes"] = new_plan_to_list(tree, field_policy=policy)
 
         return json.dumps(report, indent=2, ensure_ascii=False)
     except ValueError as e:
