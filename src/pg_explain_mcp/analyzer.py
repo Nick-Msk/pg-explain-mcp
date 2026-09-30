@@ -268,30 +268,27 @@ def new_analyze_plan(
 ) -> dict[str, Any]:
     """Analyze a plan using PlanNode-based checks.
 
-    Walks every node in pre-order and calls ``check(node)`` on each
-    check that inherits from ``ParsedPlanCheckBase``. Checks still on
-    the old ``PlanCheckBase`` are skipped here — use the old
-    ``analyze_plan`` until they migrate.
+    Walks every node in pre-order, calls ``check(node)``, and enriches
+    each resulting Issue with the node's depth and parent type — so
+    the LLM can group child issues under their root cause.
     """
     if not plan_json:
         return {"issues": [], "summary": "Empty plan"}
 
-    root = plan_json[0]
-    execution_time = root.get("Execution Time", 0)
-    planning_time = root.get("Planning Time", 0)
+    root_meta = plan_json[0]
+    execution_time = root_meta.get("Execution Time", 0)
+    planning_time = root_meta.get("Planning Time", 0)
 
     tree = new_parse_plan(plan_json)
     if tree is None:
         return {"issues": [], "summary": "Empty plan"}
 
-    new_checks = tuple(
-        c for c in checks if isinstance(c, ParsedPlanCheckBase)
-    )
-
     issues: list[Issue] = []
     for node in [tree, *tree.descendants()]:
-        for check in new_checks:
-            issues.extend(check.check(node))
+        parent_type = node.parent.node_type if node.parent else ""
+        for check in checks:
+            for issue in check.check(node):
+                issues.append(issue.with_context(node.depth, parent_type))
 
     return {
         "execution_time_ms": execution_time,
