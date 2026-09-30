@@ -137,12 +137,23 @@ def explain_query(sql: str, analyze: bool = True, buffers: bool = True) -> dict[
 def get_indexes(table_name: str | None = None) -> list[dict[str, Any]]:
     """Return a list of indexes for user tables.
 
-    Each row contains: schema, table, index name, full definition,
-    uniqueness, primary-key flag, whether the index is functional,
-    the leading attribute number (0 = expression), and the list of
-    plain column names covered by the index.
+    Args:
+        table_name: Optional filter — ``table`` or ``schema.table``.
+            If None, returns indexes for all user tables.
     """
-    query = """
+    where_parts = [
+        "ns.nspname NOT IN ('pg_catalog', 'information_schema')",
+        "tbl.relkind = 'r'",
+    ]
+    extra, params = _relation_filter(
+        table_name,
+        name_col="tbl.relname",
+        schema_col="ns.nspname",
+    )
+    if extra:
+        where_parts.append(extra)
+
+    query = f"""
         SELECT
             ns.nspname               AS schema_name,
             tbl.relname              AS table_name,
@@ -167,15 +178,12 @@ def get_indexes(table_name: str | None = None) -> list[dict[str, Any]]:
         JOIN pg_class idx     ON idx.oid = i.indexrelid
         JOIN pg_class tbl     ON tbl.oid = i.indrelid
         JOIN pg_namespace ns  ON ns.oid  = tbl.relnamespace
-        WHERE ns.nspname NOT IN ('pg_catalog', 'information_schema')
-          AND tbl.relkind = 'r'
-          AND (%(table_name)s::text IS NULL OR tbl.relname = %(table_name)s::text)
+        WHERE {' AND '.join(where_parts)}
         ORDER BY ns.nspname, tbl.relname, idx.relname
     """
-
     with get_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(query, {"table_name": table_name})
+            cur.execute(query, params)
             return cur.fetchall()
 
 # Parameters that are relevant when interpreting an execution plan.
