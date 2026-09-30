@@ -138,75 +138,63 @@ class TestSeqScanCheck:
         assert check.validate_rule(info) is True
 
 class TestEstimateMismatchCheck:
-    def test_close_estimate_is_ok(self):
-        node = {"Node Type": "Hash Join", "Plan Rows": 100, "Actual Rows": 120}
-        assert EstimateMismatchCheck().check(node) == []
+    DEFAULTS = {"threshold_ratio": "10.0", "min_rows": "1000"}
+
+    def _check(self, **overrides) -> EstimateMismatchCheck:
+        return EstimateMismatchCheck(
+            params={**self.DEFAULTS, **overrides}
+        )
+
+    def _node(self, node_type="Hash Join", parent=None, **fields):
+        return PlanNode(
+            depth=0, path="0:0", parent=parent,
+            fields={"Node Type": node_type, **fields},
+        )
+
+    def test_small_actual_is_ignored(self):
+        node = self._node(**{"Plan Rows": 5000, "Actual Rows": 1})
+        assert self._check().check(node) == []
+
+    def test_small_planned_is_ignored(self):
+        node = self._node(**{"Plan Rows": 1, "Actual Rows": 5000})
+        assert self._check().check(node) == []
+
+    def test_zero_actual_is_ignored(self):
+        node = self._node(**{"Plan Rows": 5000, "Actual Rows": 0})
+        assert self._check().check(node) == []
 
     def test_large_mismatch_is_reported(self):
-        node = {
-            "Node Type": "Hash Join",
-            "Plan Rows": 1000,
-            "Actual Rows": 50_000,
-        }
-        issues = EstimateMismatchCheck().check(node)
+        node = self._node(**{"Plan Rows": 1000, "Actual Rows": 50_000})
+        issues = self._check().check(node)
         assert len(issues) == 1
         assert issues[0].type == "estimate_mismatch"
         assert "Investigate why" in issues[0].message
+        assert "non-sargable" in issues[0].message
 
-    def test_missing_values_do_not_crash(self):
-        assert EstimateMismatchCheck().check({"Node Type": "X"}) == []
+    def test_relation_name_is_included(self):
+        node = self._node(
+            node_type="Seq Scan",
+            **{"Plan Rows": 1000, "Actual Rows": 50_000,
+               "Relation Name": "orders"},
+        )
+        msg = self._check().check(node)[0].message
+        assert "on 'orders'" in msg
 
-    def test_small_absolute_numbers_are_ignored(self):
-        """High ratio on tiny numbers is noise, not a problem."""
-        node = {"Node Type": "Bitmap Index Scan", "Plan Rows": 4, "Actual Rows": 83}
-        assert EstimateMismatchCheck().check(node) == []
+    def test_ratio_below_threshold_is_ignored(self):
+        node = self._node(**{"Plan Rows": 1000, "Actual Rows": 5000})
+        assert self._check().check(node) == []
 
-    def test_large_absolute_mismatch_is_reported(self):
-        """A real mismatch on a large scan is reported."""
-        node = {"Node Type": "Hash Join", "Plan Rows": 5_000, "Actual Rows": 200_000}
-        issues = EstimateMismatchCheck().check(node)
-        assert len(issues) == 1
-        assert issues[0].type == "estimate_mismatch"
-
-    def test_small_actual_is_ignored(self):
-        """Plan 5000, actual 1 — ratio huge but absolute numbers tiny."""
-        node = {"Node Type": "Gather", "Plan Rows": 5000, "Actual Rows": 1}
-        assert EstimateMismatchCheck().check(node) == []
-
-    def test_small_planned_is_ignored(self):
-        node = {"Node Type": "Gather", "Plan Rows": 1, "Actual Rows": 5000}
-        assert EstimateMismatchCheck().check(node) == []
-
-    def test_both_above_threshold_is_reported(self):
-        node = {"Node Type": "Seq Scan", "Plan Rows": 5000, "Actual Rows": 200_000}
-        assert len(EstimateMismatchCheck().check(node)) == 1
-
-    def test_gather_info_none_when_actual_zero(self):
-        check = EstimateMismatchCheck()
-        node = {"Plan Rows": 5000, "Actual Rows": 0}
-        assert check.gather_info(node) is None
-
-    def test_validate_rule_rejects_low_planned(self):
-        check = EstimateMismatchCheck(min_rows=1000)
-        info = {"planned": 100, "actual": 5000, "ratio": 50.0,
-                "node_type": "Seq Scan", "relation": "t"}
-        assert check.validate_rule(info) is False
-
-    def test_validate_rule_accepts_both_sides_above(self):
-        check = EstimateMismatchCheck(min_rows=1000, threshold_ratio=10.0)
-        info = {"planned": 1000, "actual": 50_000, "ratio": 50.0,
-                "node_type": "Seq Scan", "relation": "t"}
-        assert check.validate_rule(info) is True
-
-    def test_gather_info_ignores_limit_parent(self):
-        check = EstimateMismatchCheck()
-        node = {"Node Type": "Index Scan", "Plan Rows": 999996, "Actual Rows": 5000}
-        assert check.gather_info(node, "Limit") is None
-        assert check.gather_info(node) is not None   # sanity
-
-def test_missing_param_raises(self):
-    with pytest.raises(ValueError, match="missing required param 'min_rows'"):
-        EstimateMismatchCheck(params={"threshold_ratio": "10.0"})
+    def test_direct_limit_parent_is_ignored(self):
+        limit = self._node(node_type="Limit")
+        scan = PlanNode(
+            depth=1, path="0:0/1:0", parent=limit,
+            fields={
+                "Node Type": "Index Scan",
+                "Plan Rows": 999_996,
+                "Actual Rows": 5000,
+            },
+        )
+        assert self._check().check(scan) == []
 
 class TestDiskSpillSortCheck:
     def _check(self, min_spill_kb: int = 0) -> DiskSpillSortCheck:

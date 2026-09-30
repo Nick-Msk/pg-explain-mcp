@@ -18,7 +18,7 @@ insert into tags (name) values
 
 insert into checks (num, database, name, description, enabled) values
     (1,  'postgres', 'SeqScanCheck',          'sequential scan that discards most rows',                0),
-    (2,  'postgres', 'EstimateMismatchCheck', 'planner cardinality misestimate',                        0),
+    (2,  'postgres', 'EstimateMismatchCheck', 'planner cardinality misestimate',                        1),
     (3,  'postgres', 'DiskSpillSortCheck',    'sort spilling to disk',                                  1),
     (4,  'postgres', 'DiskSpillHashCheck',    'hash operation using multiple batches',                  1),
     (5,  'postgres', 'NestedLoopCheck',       'Nested Loop with many inner iterations',                 0),

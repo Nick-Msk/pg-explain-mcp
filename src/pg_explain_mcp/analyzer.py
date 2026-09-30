@@ -482,7 +482,7 @@ class SeqScanCheck(PlanCheckBase):
             )
         ]
 
-class EstimateMismatchCheck(PlanCheckBase):
+class EstimateMismatchCheck(ParsedPlanCheckBase):
     """Planner cardinality misestimate.
 
     ``gather_info`` returns:
@@ -510,12 +510,17 @@ class EstimateMismatchCheck(PlanCheckBase):
     }
 
     def gather_info(self, node: PlanNode) -> dict[str, Any] | None:
-        if node.is_under("Limit"):
+        # plan_rows under a Limit is the full-scan estimate, not the
+        # truncated one — comparing it to actual yields a spurious
+        # ratio.
+        if node.parent is not None and node.parent.node_type == "Limit":
             return None
+
         planned = node.get("Plan Rows", 0)
         actual = node.get("Actual Rows", 0)
         if planned <= 0 or actual <= 0:
             return None
+
         return {
             "planned": planned,
             "actual": actual,
@@ -539,8 +544,8 @@ class EstimateMismatchCheck(PlanCheckBase):
                 type=self.type,
                 message=(
                     f"Planner misestimated cardinality on "
-                    f"'{info['node_type']}'{where}: "
-                    f"expected {info['planned']}, got {info['actual']} "
+                    f"'{info['node_type']}'{where}: expected "
+                    f"{info['planned']}, got {info['actual']} "
                     f"(ratio x{info['ratio']:.1f}). "
                     "Investigate why: stale statistics, a non-sargable "
                     "predicate on the column, or a distribution not "
@@ -550,7 +555,6 @@ class EstimateMismatchCheck(PlanCheckBase):
                 node=info["node_type"],
             )
         ]
-
 
 class DiskSpillSortCheck(ParsedPlanCheckBase):
     """Sort spilled to disk — work_mem is too small.
