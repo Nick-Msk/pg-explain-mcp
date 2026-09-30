@@ -297,6 +297,9 @@ class CheckRegistry:
     def load_field_policy(self) -> dict[str, int]:
         return load_field_policy(TARGET_DB_TYPE, self._db_path)
 
+    def load_field_config(self) -> dict[str, tuple[str, int]]:   # ← добавить
+        return load_field_config(TARGET_DB_TYPE, self._db_path)
+
 def init_db(db_path: Path | str = DEFAULT_DB) -> None:
     """Create or rebuild the config database from schema.sql and seed.sql.
 
@@ -378,6 +381,25 @@ def load_field_policy(
             (database,),
         ).fetchall()
         return {raw: mode for raw, mode in rows}
+
+def load_field_config(
+    database: str = TARGET_DB_TYPE,
+    db_path: Path | str = DEFAULT_DB,
+) -> dict[str, tuple[str, int]]:
+    """Return {raw: (key, mode)} for plan output.
+
+    ``key`` is the compact field name (``actual_rows``), ``mode`` is
+    the filtering policy (0=hide, 1=keep zeros, 999=drop zeros).
+    """
+    db_path = Path(db_path)
+    _ensure_db(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            "select raw, key, enabled from plan_fields where database = ?",
+            (database,),
+        ).fetchall()
+        return {raw: (key, mode) for raw, key, mode in rows}
 
 def main(argv: list[str] | None = None) -> int:
     """Entry point for `pg-explain-config` console script."""
