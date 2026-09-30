@@ -61,8 +61,8 @@ prompt:
 - **`calculate adjustments precisely`** — forces the model to call
   `list_parameters` and show the arithmetic instead of recommending a
   generic value. See the precise variants:
-  - [disk_spill_hash](pg_disk_spill_hash/sample_disk_spill_hash_on_spill_adv.md)
-  - [disk_spill_sort](pg_disk_spill_sort/sample_disk_spill_sort_on_spill_adv.md)
+  - [`disk_spill_hash`](pg_disk_spill_hash/sample_disk_spill_hash_on_spill_adv.md)
+  - [`disk_spill_sort`](pg_disk_spill_sort/sample_disk_spill_sort_on_spill_adv.md)
 - **`show me the raw json output`** — makes the model quote the tool
   output verbatim, useful for debugging.
 
@@ -182,7 +182,7 @@ call mcp_explain_tool.fill_bitmap_heap_scan(5000000);
 
 ---
 
-## EstimateMismatchCheck: five scenarios
+## EstimateMismatchCheck: six scenarios
 
 Reproducible scenarios backed by
 `mcp_explain_tool.data_estimate_mismatch_norm` and
@@ -201,6 +201,7 @@ call mcp_explain_tool.fill_estimate_mismatch(1000000);
 | [Skewed — fake stats for `val = 42`](pg_estimate_mismatch/sample_estimate_mismatch_on_skewed.md) | Ratio ~94.5x, `estimate_mismatch` and `seq_scan` fire |
 | [Skewed — different value `val = 43`](pg_estimate_mismatch/sample_estimate_mismatch_on_skewed_other_value.md) | Ratio ~1.02x, `estimate_mismatch` stays silent |
 | [Skewed — leak on `val = 44`](pg_estimate_mismatch/sample_estimate_mismatch_on_skewed_leak.md) | Ratio ~19.6x, but absolute numbers below `min_rows` — check stays silent |
+| [Misestimate under deep Limit](pg_estimate_mismatch/sample_estimate_mismatch_under_limit.md) | Limit → Gather Merge → Sort → Seq Scan, ratio x117 — check suppresses |
 
 The skewed fixture uses `pg_restore_attribute_stats()` to overwrite
 statistics for a single value, and disables autovacuum on the table so
