@@ -17,7 +17,7 @@ insert into tags (name) values
     ('HASH');
 
 insert into checks (num, database, name, description, enabled) values
-    (1,  'postgres', 'SeqScanCheck',          'sequential scan that discards most rows',                0),
+    (1,  'postgres', 'SeqScanCheck',          'sequential scan that discards most rows',                1),
     (2,  'postgres', 'EstimateMismatchCheck', 'planner cardinality misestimate',                        1),
     (3,  'postgres', 'DiskSpillSortCheck',    'sort spilling to disk',                                  1),
     (4,  'postgres', 'DiskSpillHashCheck',    'hash operation using multiple batches',                  1),

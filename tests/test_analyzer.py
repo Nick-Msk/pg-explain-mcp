@@ -29,113 +29,66 @@ from tests.conftest import ALL_CHECKS
 
 
 class TestSeqScanCheck:
-    def test_small_table_is_ok(self):
-        node = {"Node Type": "Seq Scan", "Actual Rows": 100, "Relation Name": "t"}
-        assert SeqScanCheck().check(node) == []
+    DEFAULTS = {"threshold_rows": "1000", "min_filter_ratio": "0.9"}
 
-    def test_large_table_is_reported(self):
-        node = {
-            "Node Type": "Seq Scan",
+    def _check(self, **overrides) -> SeqScanCheck:
+        return SeqScanCheck(params={**self.DEFAULTS, **overrides})
+
+    def _node(self, **fields) -> PlanNode:
+        return PlanNode(depth=0, path="0:0",
+                        fields={"Node Type": "Seq Scan", **fields})
+
+    def test_small_scan_is_ok(self):
+        node = self._node(**{"Actual Rows": 100, "Relation Name": "t"})
+        assert self._check().check(node) == []
+
+    def test_no_filter_is_ok(self):
+        node = self._node(**{"Actual Rows": 1_000_000, "Relation Name": "t"})
+        assert self._check().check(node) == []
+
+    def test_moderate_selectivity_is_ok(self):
+        node = self._node(**{
+            "Actual Rows": 5000,
+            "Rows Removed by Filter": 5000,
             "Relation Name": "t",
+        })
+        assert self._check().check(node) == []
+
+    def test_high_selectivity_is_reported(self):
+        node = self._node(**{
             "Actual Rows": 100,
-            "Rows Removed by Filter": 9900,
-        }
-        issues = SeqScanCheck().check(node)
+            "Rows Removed by Filter": 999_900,
+            "Relation Name": "big",
+        })
+        issues = self._check().check(node)
         assert len(issues) == 1
         assert issues[0].type == "seq_scan"
-        assert "10000 rows" in issues[0].message
+        assert issues[0].severity == "warning"
+        assert "1000000 rows" in issues[0].message
+        assert "999900 filtered out" in issues[0].message
+        assert "big" in issues[0].message
 
-    def test_boundary_value_is_ok(self):
-        node = {
-            "Node Type": "Seq Scan",
+    def test_other_node_type_is_ignored(self):
+        node = PlanNode(depth=0, path="0:0", fields={
+            "Node Type": "Index Scan", "Actual Rows": 999_999,
+        })
+        assert self._check().check(node) == []
+
+    def test_custom_thresholds(self):
+        node = self._node(**{
             "Actual Rows": 500,
             "Rows Removed by Filter": 500,
             "Relation Name": "t",
-        }
-        assert SeqScanCheck().check(node) == []
-
-    def test_other_node_type_is_ignored(self):
-        node = {"Node Type": "Index Scan", "Actual Rows": 999999}
-        assert SeqScanCheck().check(node) == []
-
-    def test_message_is_neutral(self):
-        node = {
-            "Node Type": "Seq Scan",
-            "Relation Name": "big",
-            "Actual Rows": 100,
-            "Rows Removed by Filter": 999_900,
-        }
-        issues = SeqScanCheck().check(node)
-        assert "Verify whether an index" in issues[0].message
-        assert "if it does, investigate" in issues[0].message.lower()
-
-    def test_moderate_selectivity_is_ok(self):
-        """Filter discards ~50 % — not enough to justify an index."""
-        node = {
-            "Node Type": "Seq Scan",
-            "Relation Name": "t",
-            "Actual Rows": 5000,
-            "Rows Removed by Filter": 5000,
-        }
-        assert SeqScanCheck().check(node) == []
-
-    def test_no_filter_is_ok(self):
-        """Self-join or full scan — index won't help."""
-        node = {
-            "Node Type": "Seq Scan",
-            "Relation Name": "t",
-            "Actual Rows": 1_000_000,
-        }
-        assert SeqScanCheck().check(node) == []
-
-    def test_high_selectivity_filter_is_reported(self):
-        node = {
-            "Node Type": "Seq Scan",
-            "Relation Name": "big",
-            "Actual Rows": 100,
-            "Rows Removed by Filter": 999_900,
-        }
-        issues = SeqScanCheck().check(node)
-        assert len(issues) == 1
-        assert "Verify whether an index" in issues[0].message
-
-    def test_gather_info_returns_none_for_wrong_node(self):
-        check = SeqScanCheck()
-        assert check.gather_info({"Node Type": "Index Scan"}) is None
-
-    def test_gather_info_returns_none_for_empty_scan(self):
-        check = SeqScanCheck()
-        node = {"Node Type": "Seq Scan", "Actual Rows": 0, "Rows Removed by Filter": 0}
-        assert check.gather_info(node) is None
-
-    def test_gather_info_computes_ratio(self):
-        check = SeqScanCheck()
-        info = check.gather_info({
-            "Node Type": "Seq Scan",
-            "Relation Name": "t",
-            "Actual Rows": 100,
-            "Rows Removed by Filter": 900,
         })
-        assert info["total_read"] == 1000
-        assert info["ratio"] == 0.9   # 900 / 1000 — 90% discarded
-
-    def test_validate_rule_rejects_no_filter(self):
-        check = SeqScanCheck()
-        info = {"actual": 5000.0, "removed": 0.0, "total_read": 5000.0,
-                "ratio": 0.0, "relation": "t"}
-        assert check.validate_rule(info) is False
-
-    def test_validate_rule_rejects_moderate_selectivity(self):
-        check = SeqScanCheck(min_filter_ratio=0.9)
-        info = {"actual": 5000.0, "removed": 5000.0, "total_read": 10000.0,
-                "ratio": 0.5, "relation": "t"}
-        assert check.validate_rule(info) is False
-
-    def test_validate_rule_accepts_high_selectivity(self):
-        check = SeqScanCheck(min_filter_ratio=0.9)
-        info = {"actual": 100.0, "removed": 99900.0, "total_read": 100000.0,
-                "ratio": 0.999, "relation": "t"}
-        assert check.validate_rule(info) is True
+        # default: total 1000 <= threshold 1000 → silent
+        assert self._check().check(node) == []
+        # custom: threshold 100 → fires (ratio 0.5 < 0.9 — so still silent)
+        assert self._check(threshold_rows="100").check(node) == []
+        # relax ratio → fires
+        issues = self._check(
+            threshold_rows="100", min_filter_ratio="0.4"
+        ).check(node)
+        assert len(issues) == 1
 
 class TestEstimateMismatchCheck:
     DEFAULTS = {"threshold_ratio": "10.0", "min_rows": "1000"}

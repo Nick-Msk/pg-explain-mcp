@@ -388,7 +388,7 @@ class PlanCheckBase(CheckBase):
         ...
 
 
-class SeqScanCheck(PlanCheckBase):
+class SeqScanCheck(ParsedPlanCheckBase):
     """Sequential scan that discards most of what it reads.
 
     A Seq Scan is not a problem by itself. It becomes one when the
@@ -399,8 +399,7 @@ class SeqScanCheck(PlanCheckBase):
 
     - small scans (below ``threshold_rows``);
     - scans with no filter (``Rows Removed by Filter = 0``) — reading
-      the whole table is the only reasonable strategy here, and an
-      index would not change the plan;
+      the whole table is the only reasonable strategy here;
     - scans where the filter rejects less than ``min_filter_ratio`` of
       the rows read — an index rarely beats a Seq Scan at moderate
       selectivity.
@@ -408,10 +407,10 @@ class SeqScanCheck(PlanCheckBase):
     ``gather_info`` returns:
 
         {
-            "actual":     float,   # rows returned by the scan
-            "removed":    float,   # rows discarded by the filter
-            "total_read": float,   # actual + removed
-            "ratio":      float,   # removed / total_read, in [0, 1]
+            "actual":     float,
+            "removed":    float,
+            "total_read": float,
+            "ratio":      float,   # removed / total_read
             "relation":   str,
         }
 
@@ -422,21 +421,13 @@ class SeqScanCheck(PlanCheckBase):
 
     name = "SeqScanCheck"
     type = "seq_scan"
+    PARAMS = {
+        "threshold_rows":   int,
+        "min_filter_ratio": float,
+    }
 
-    def __init__(
-        self,
-        threshold_rows: int = 1000,
-        min_filter_ratio: float = 0.9,
-    ) -> None:
-        self.threshold_rows = threshold_rows
-        self.min_filter_ratio = min_filter_ratio
-
-    def gather_info(
-        self,
-        node: dict[str, Any],
-        parent_type: str = ""
-    ) -> dict[str, Any] | None:
-        if node.get("Node Type") != "Seq Scan":
+    def gather_info(self, node: PlanNode) -> dict[str, Any] | None:
+        if node.node_type != "Seq Scan":
             return None
 
         actual = node.get("Actual Rows", 0)
@@ -454,11 +445,11 @@ class SeqScanCheck(PlanCheckBase):
         }
 
     def validate_rule(self, info: dict[str, Any]) -> bool:
-        if info["total_read"] <= self.threshold_rows:
+        if info["total_read"] <= self.params["threshold_rows"]:
             return False
         if info["removed"] == 0:
             return False
-        return info["ratio"] >= self.min_filter_ratio
+        return info["ratio"] >= self.params["min_filter_ratio"]
 
     def generate_msg(self, info: dict[str, Any]) -> list[Issue]:
         pct = info["ratio"] * 100
@@ -472,11 +463,11 @@ class SeqScanCheck(PlanCheckBase):
                     f"({info['actual']} returned, "
                     f"{info['removed']} filtered out, "
                     f"{pct:.1f}% discarded). "
-                    "Verify whether an index on the filter column exists; "
-                    "if it does, investigate why the planner ignored it "
-                    "(stale statistics, low correlation, or high "
-                    "random_page_cost). If no index exists, consider "
-                    "adding one."
+                    "Verify whether an index on the filter column "
+                    "exists; if it does, investigate why the planner "
+                    "ignored it (stale statistics, low correlation, or "
+                    "high random_page_cost). If no index exists, "
+                    "consider adding one."
                 ),
                 node="Seq Scan",
             )
