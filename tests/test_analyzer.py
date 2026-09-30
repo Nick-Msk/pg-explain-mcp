@@ -332,76 +332,79 @@ class TestDiskSpillHashCheck:
         assert self._check(min_batches="4").check(node) == []
 
 class TestNestedLoopCheck:
+    def _check(self, threshold_loops: int = 1000) -> NestedLoopCheck:
+        return NestedLoopCheck(
+            params={"threshold_loops": str(threshold_loops)}
+        )
+
+    @staticmethod
+    def _nl(outer, inner) -> PlanNode:
+        return PlanNode(
+            depth=0, path="0:0",
+            fields={"Node Type": "Nested Loop"},
+            children=[outer, inner],
+        )
+
     def test_few_loops_is_ok(self):
-        node = {
-            "Node Type": "Nested Loop",
-            "Plans": [
-                {"Node Type": "Seq Scan", "Actual Loops": 1},
-                {"Node Type": "Index Scan", "Actual Loops": 10},
-            ],
-        }
-        assert NestedLoopCheck().check(node) == []
+        outer = PlanNode(depth=1, path="0:0/1:0",
+                         fields={"Node Type": "Seq Scan"})
+        inner = PlanNode(depth=1, path="0:0/1:1",
+                         fields={"Node Type": "Index Scan",
+                                 "Actual Loops": 10})
+        assert self._check().check(self._nl(outer, inner)) == []
 
     def test_many_loops_is_reported(self):
-        node = {
-            "Node Type": "Nested Loop",
-            "Plans": [
-                {"Node Type": "Seq Scan", "Actual Loops": 1},
-                {
-                    "Node Type": "Index Scan",
-                    "Relation Name": "inner_table",
-                    "Actual Loops": 5000,
-                },
-            ],
-        }
-        issues = NestedLoopCheck().check(node)
+        outer = PlanNode(depth=1, path="0:0/1:0",
+                         fields={"Node Type": "Seq Scan"})
+        inner = PlanNode(depth=1, path="0:0/1:1", fields={
+            "Node Type": "Index Only Scan",
+            "Relation Name": "inner_t",
+            "Actual Loops": 5000,
+            "Actual Rows": 0.98,
+        })
+        issues = self._check().check(self._nl(outer, inner))
         assert len(issues) == 1
+        assert issues[0].severity == "info"
         assert issues[0].type == "nested_loop"
         assert "5000 times" in issues[0].message
-        assert "inner_table" in issues[0].message
+        assert "inner_t" in issues[0].message
+        assert "Index Only Scan" in issues[0].message
 
-    def test_missing_inner_child_does_not_crash(self):
-        node = {"Node Type": "Nested Loop", "Plans": []}
-        assert NestedLoopCheck().check(node) == []
+    def test_missing_inner_child_is_ignored(self):
+        outer = PlanNode(depth=1, path="0:0/1:0",
+                         fields={"Node Type": "Seq Scan"})
+        node = PlanNode(depth=0, path="0:0",
+                        fields={"Node Type": "Nested Loop"},
+                        children=[outer])
+        assert self._check().check(node) == []
 
-    def test_other_node_type_is_ignored(self):
-        node = {"Node Type": "Hash Join", "Plans": [{"Actual Loops": 99999}]}
-        assert NestedLoopCheck().check(node) == []
+    def test_wrong_node_type_is_ignored(self):
+        node = PlanNode(depth=0, path="0:0",
+                        fields={"Node Type": "Hash Join"})
+        assert self._check().check(node) == []
 
-    def test_gather_info_returns_none_for_wrong_node(self):
-        check = NestedLoopCheck()
-        assert check.gather_info({"Node Type": "Hash Join"}) is None
+    def test_boundary_value_is_ok(self):
+        outer = PlanNode(depth=1, path="0:0/1:0",
+                         fields={"Node Type": "Seq Scan"})
+        inner = PlanNode(depth=1, path="0:0/1:1", fields={
+            "Node Type": "Index Scan",
+            "Actual Loops": 1000,
+        })
+        assert self._check().check(self._nl(outer, inner)) == []
 
-    def test_gather_info_returns_none_for_missing_inner(self):
-        check = NestedLoopCheck()
-        node = {"Node Type": "Nested Loop", "Plans": [{"Node Type": "Seq Scan"}]}
-        assert check.gather_info(node) is None
-
-    def test_gather_info_reads_inner_child(self):
-        check = NestedLoopCheck()
-        node = {
-            "Node Type": "Nested Loop",
-            "Plans": [
-                {"Node Type": "Seq Scan", "Actual Loops": 1},
-                {
-                    "Node Type": "Index Only Scan",
-                    "Relation Name": "inner_t",
-                    "Actual Loops": 5000,
-                    "Actual Rows": 0.98,
-                },
-            ],
-        }
-        info = check.gather_info(node)
-        assert info["loops"] == 5000
-        assert info["inner_type"] == "Index Only Scan"
-        assert info["inner_relation"] == "inner_t"
-        assert info["inner_avg_rows"] == 0.98
-
-    def test_validate_rule_threshold(self):
-        check = NestedLoopCheck(threshold_loops=100)
-        assert check.validate_rule({"loops": 101}) is True
-        assert check.validate_rule({"loops": 100}) is False
-        assert check.validate_rule({"loops": 50}) is False
+    def test_custom_threshold(self):
+        outer = PlanNode(depth=1, path="0:0/1:0",
+                         fields={"Node Type": "Seq Scan"})
+        inner = PlanNode(depth=1, path="0:0/1:1", fields={
+            "Node Type": "Index Scan",
+            "Actual Loops": 500,
+        })
+        assert self._check(threshold_loops=100).check(
+            self._nl(outer, inner)
+        )
+        assert self._check(threshold_loops=1000).check(
+            self._nl(outer, inner)
+        ) == []
 
 class TestBitmapHeapScanCheck:
     def test_small_bitmap_is_ok(self):

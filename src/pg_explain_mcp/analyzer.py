@@ -721,11 +721,11 @@ class DiskSpillHashCheck(ParsedPlanCheckBase):
             )
         ]
 
-class NestedLoopCheck(PlanCheckBase):
+class NestedLoopCheck(ParsedPlanCheckBase):
     """Nested Loop with a high number of inner iterations.
 
     PostgreSQL reports the loop count on the **inner** child
-    (``Plans[1]``), not on the Nested Loop node itself — the outer
+    (``children[1]``), not on the Nested Loop node itself — the outer
     node always reports ``Actual Loops = 1``.
 
     A Nested Loop with an indexed inner side and ~1 row per lookup is
@@ -736,47 +736,33 @@ class NestedLoopCheck(PlanCheckBase):
     ``gather_info`` returns:
 
         {
-            "loops":          int,    # inner-side iteration count
+            "loops":          int,
             "inner_type":     str,
             "inner_relation": str,
             "inner_avg_rows": float,
         }
-
-    Fires at ``INFO`` level.
     """
 
     name = "NestedLoopCheck"
     type = "nested_loop"
+    PARAMS = {"threshold_loops": int}
 
-    def __init__(
-        self,
-        threshold_loops: int = 1000,
-        **_ignored: Any,
-    ) -> None:
-        self.threshold_loops = threshold_loops
-
-    def gather_info(
-        self,
-        node: dict[str, Any],
-        parent_type: str = ""
-    ) -> dict[str, Any] | None:
-        if node.get("Node Type") != "Nested Loop":
+    def gather_info(self, node: PlanNode) -> dict[str, Any] | None:
+        if node.node_type != "Nested Loop":
+            return None
+        if len(node.children) < 2:
             return None
 
-        plans = node.get("Plans", [])
-        if len(plans) < 2:
-            return None
-
-        inner = plans[1]
+        inner = node.children[1]
         return {
             "loops": inner.get("Actual Loops", 1),
-            "inner_type": inner.get("Node Type", "?"),
+            "inner_type": inner.node_type,
             "inner_relation": inner.get("Relation Name", "?"),
             "inner_avg_rows": inner.get("Actual Rows", 0),
         }
 
     def validate_rule(self, info: dict[str, Any]) -> bool:
-        return info["loops"] > self.threshold_loops
+        return info["loops"] > self.params["threshold_loops"]
 
     def generate_msg(self, info: dict[str, Any]) -> list[Issue]:
         return [
@@ -785,7 +771,8 @@ class NestedLoopCheck(PlanCheckBase):
                 type=self.type,
                 message=(
                     f"Nested Loop ran the inner side {info['loops']} times "
-                    f"('{info['inner_type']}' on '{info['inner_relation']}', "
+                    f"('{info['inner_type']}' on "
+                    f"'{info['inner_relation']}', "
                     f"~{info['inner_avg_rows']:.2f} rows per loop). "
                     "This is optimal for the current data, but execution "
                     "time grows linearly with the outer row count — "
