@@ -30,7 +30,7 @@ _REGISTRY: dict[str, type[CheckBase]] = {
 #    "SeqScanCheck":          SeqScanCheck,
 #    "EstimateMismatchCheck": EstimateMismatchCheck,
     "DiskSpillSortCheck":    DiskSpillSortCheck,
-#    "DiskSpillHashCheck":    DiskSpillHashCheck,
+    "DiskSpillHashCheck":    DiskSpillHashCheck,
 #    "NestedLoopCheck":       NestedLoopCheck,
     "BitmapHeapScanCheck":   BitmapHeapScanCheck,
 #    "IndexRegularScanCheck": IndexRegularScanCheck,

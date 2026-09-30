@@ -635,31 +635,23 @@ class DiskSpillSortCheck(ParsedPlanCheckBase):
             )
         ]
 
-class DiskSpillHashCheck(PlanCheckBase):
+class DiskSpillHashCheck(ParsedPlanCheckBase):
     """Hash operation spilled to disk — work_mem is too small.
 
     When the hash table no longer fits in ``work_mem``, PostgreSQL
     partitions it into multiple batches and writes the excess to
     temporary files on disk.
 
-    Two fields matter when interpreting the message:
-
-    - ``Peak Memory Usage`` — memory used by **one** batch, not the
-      whole hash table. When spilling, the real size is roughly
-      ``peak_memory × batches``.
-    - ``Disk Usage`` — actual bytes written to temporary files, when
-      PostgreSQL reports them.
-
     ``gather_info`` returns:
 
         {
-            "batches":       int,
-            "peak_kb":       int,    # 0 if absent
-            "estimated_mb":  float,  # 0.0 if peak absent
-            "disk_kb":       int,    # 0 if absent
-            "parallel":      bool,
-            "loops":         int,
-            "node_type":     str,
+            "batches":      int,
+            "peak_kb":      int,      # 0 if absent
+            "estimated_mb": float,    # 0.0 if peak absent
+            "disk_kb":      int,      # 0 if absent
+            "parallel":     bool,
+            "loops":        int,
+            "node_type":    str,
         }
 
     The effective hash budget is ``work_mem × hash_mem_multiplier`` —
@@ -669,15 +661,9 @@ class DiskSpillHashCheck(PlanCheckBase):
 
     name = "DiskSpillHashCheck"
     type = "disk_spill_hash"
+    PARAMS = {"min_batches": int}
 
-    def __init__(self, min_batches: int = 2) -> None:
-        self.min_batches = min_batches
-
-    def gather_info(
-        self,
-        node: dict[str, Any],
-        parent_type: str = ""
-    ) -> dict[str, Any] | None:
+    def gather_info(self, node: PlanNode) -> dict[str, Any] | None:
         batches = node.get("Hash Batches", 1)
         if batches <= 0:
             return None
@@ -686,21 +672,25 @@ class DiskSpillHashCheck(PlanCheckBase):
         return {
             "batches": batches,
             "peak_kb": peak_kb,
-            "estimated_mb": round(peak_kb * batches / 1024, 1) if peak_kb else 0.0,
+            "estimated_mb": (
+                round(peak_kb * batches / 1024, 1) if peak_kb else 0.0
+            ),
             "disk_kb": node.get("Disk Usage", 0),
             "parallel": node.get("Parallel Aware", False),
             "loops": node.get("Actual Loops", 1),
-            "node_type": node.get("Node Type", "Hash"),
+            "node_type": node.node_type,
         }
 
     def validate_rule(self, info: dict[str, Any]) -> bool:
-        return info["batches"] >= self.min_batches
+        return info["batches"] >= self.params["min_batches"]
 
     def generate_msg(self, info: dict[str, Any]) -> list[Issue]:
         parts = [f"{info['batches']} batches"]
         if info["peak_kb"]:
             parts.append(f"peak {info['peak_kb']}kB per batch")
-            parts.append(f"estimated full size ≈ {info['estimated_mb']} MB")
+            parts.append(
+                f"estimated full size ≈ {info['estimated_mb']} MB"
+            )
         if info["disk_kb"]:
             parts.append(f"disk {info['disk_kb']}kB")
 
@@ -716,10 +706,12 @@ class DiskSpillHashCheck(PlanCheckBase):
                 severity=SEVERITY_WARNING,
                 type=self.type,
                 message=(
-                    f"Hash operation spilled to disk{parallel_note}: {details}. "
-                    "To keep the hash table in memory, set work_mem such that "
-                    "work_mem × hash_mem_multiplier > estimated full size. "
-                    "Call list_parameters for the current hash_mem_multiplier."
+                    f"Hash operation spilled to disk{parallel_note}: "
+                    f"{details}. "
+                    "To keep the hash table in memory, set work_mem such "
+                    "that work_mem × hash_mem_multiplier > estimated full "
+                    "size. Call list_parameters for the current "
+                    "hash_mem_multiplier."
                 ),
                 node=info["node_type"],
             )

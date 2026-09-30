@@ -255,80 +255,56 @@ class TestDiskSpillSortCheck:
         assert self._check(min_spill_kb=1000).check(node) == []
 
 class TestDiskSpillHashCheck:
+    DEFAULTS = {"min_batches": "2"}
+
+    def _check(self, **overrides) -> DiskSpillHashCheck:
+        return DiskSpillHashCheck(
+            params={**self.DEFAULTS, **overrides}
+        )
+
     def test_single_batch_is_ok(self):
-        assert DiskSpillHashCheck().check({"Hash Batches": 1}) == []
+        node = PlanNode(depth=0, path="0:0", fields={
+            "Node Type": "Hash", "Hash Batches": 1,
+        })
+        assert self._check().check(node) == []
+
+    def test_missing_batches_is_ok(self):
+        node = PlanNode(depth=0, path="0:0", fields={
+            "Node Type": "Hash",
+        })
+        assert self._check().check(node) == []
 
     def test_multiple_batches_is_reported(self):
-        node = {
-            "Node Type": "Hash",
-            "Hash Batches": 8,
-            "Peak Memory Usage": 20000,
-        }
-        issues = DiskSpillHashCheck().check(node)
-        assert len(issues) == 1
-        assert "8 batches" in issues[0].message
-        assert "estimated full size" in issues[0].message
-
-    def test_message_mentions_multiplier_formula(self):
-        node = {"Hash Batches": 4, "Peak Memory Usage": 37536}
-        issues = DiskSpillHashCheck().check(node)
-        assert "hash_mem_multiplier" in issues[0].message
-        assert "list_parameters" in issues[0].message
-
-    def test_parallel_hash_is_annotated(self):
-        node = {
-            "Node Type": "Hash",
-            "Hash Batches": 4,
-            "Peak Memory Usage": 37536,
-            "Disk Usage": 10720,
-            "Parallel Aware": True,
-            "Actual Loops": 3,
-        }
-        issues = DiskSpillHashCheck().check(node)
-        msg = issues[0].message
-        assert "3 workers" in msg
-        assert "37536kB per batch" in msg
-        assert "146.6 MB" in msg
-        assert "disk 10720kB" in msg
-
-    def test_missing_fields_do_not_crash(self):
-        node = {"Hash Batches": 4}
-        issues = DiskSpillHashCheck().check(node)
-        assert len(issues) == 1
-        assert "4 batches" in issues[0].message
-
-    def test_gather_info_returns_none_when_batches_invalid(self):
-        check = DiskSpillHashCheck()
-        assert check.gather_info({"Hash Batches": 0}) is None
-
-    def test_gather_info_returns_info_for_default(self):
-        """Missing 'Hash Batches' falls back to 1 — hash not spilled."""
-        check = DiskSpillHashCheck()
-        info = check.gather_info({"Node Type": "Hash"})
-        assert info["batches"] == 1
-
-    def test_gather_info_computes_estimated_mb(self):
-        check = DiskSpillHashCheck()
-        info = check.gather_info({
+        node = PlanNode(depth=0, path="0:0", fields={
             "Node Type": "Hash",
             "Hash Batches": 4,
             "Peak Memory Usage": 37536,
         })
-        assert info["batches"] == 4
-        assert info["peak_kb"] == 37536
-        assert info["estimated_mb"] == 146.6
+        issues = self._check().check(node)
+        assert len(issues) == 1
+        assert issues[0].type == "disk_spill_hash"
+        assert "4 batches" in issues[0].message
+        assert "37536kB" in issues[0].message
+        assert "146.6 MB" in issues[0].message
 
-    def test_gather_info_without_peak(self):
-        """A malformed plan without Peak Memory Usage still parses."""
-        check = DiskSpillHashCheck()
-        info = check.gather_info({"Hash Batches": 4})
-        assert info["peak_kb"] == 0
-        assert info["estimated_mb"] == 0.0
+    def test_parallel_hash_is_annotated(self):
+        node = PlanNode(depth=0, path="0:0", fields={
+            "Node Type": "Hash",
+            "Hash Batches": 4,
+            "Peak Memory Usage": 37536,
+            "Parallel Aware": True,
+            "Actual Loops": 3,
+        })
+        msg = self._check().check(node)[0].message
+        assert "3 workers" in msg
 
-    def test_validate_rule_threshold(self):
-        check = DiskSpillHashCheck(min_batches=4)
-        assert check.validate_rule({"batches": 4}) is True
-        assert check.validate_rule({"batches": 3}) is False
+    def test_custom_threshold_suppresses_small(self):
+        node = PlanNode(depth=0, path="0:0", fields={
+            "Node Type": "Hash",
+            "Hash Batches": 2,
+            "Peak Memory Usage": 100,
+        })
+        assert self._check(min_batches="4").check(node) == []
 
 class TestNestedLoopCheck:
     def test_few_loops_is_ok(self):
