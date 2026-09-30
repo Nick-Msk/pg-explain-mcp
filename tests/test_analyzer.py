@@ -502,57 +502,57 @@ class TestIndexOnlyScanCheck:
         assert self._check().check(node) == []
 
 class TestIndexRegularScanCheck:
+    DEFAULTS = {"min_rows": "1000", "min_disk_blocks": "100"}
+
+    def _check(self, **overrides) -> IndexRegularScanCheck:
+        return IndexRegularScanCheck(params={**self.DEFAULTS, **overrides})
+
+    def _node(self, **fields) -> PlanNode:
+        return PlanNode(depth=0, path="0:0",
+                        fields={"Node Type": "Index Scan", **fields})
+
     def test_few_blocks_is_ok(self):
-        check = IndexRegularScanCheck()
-        node = {
-            "Node Type": "Index Scan",
-            "Actual Rows": 5000,
-            "Shared Read Blocks": 0,
-        }
-        assert check.check(node) == []
+        node = self._node(**{"Actual Rows": 5000, "Shared Read Blocks": 0})
+        assert self._check().check(node) == []
 
     def test_below_min_rows_is_ok(self):
-        check = IndexRegularScanCheck()
-        node = {
-            "Node Type": "Index Scan",
-            "Actual Rows": 500,
-            "Shared Read Blocks": 9000,
-        }
-        assert check.check(node) == []
+        node = self._node(**{
+            "Actual Rows": 500, "Shared Read Blocks": 9000,
+        })
+        assert self._check().check(node) == []
 
     def test_poor_clustering_is_reported(self):
-        check = IndexRegularScanCheck()
-        node = {
-            "Node Type": "Index Scan",
+        node = self._node(**{
             "Index Name": "idx_users_email",
             "Relation Name": "users",
             "Actual Rows": 20_000,
             "Shared Read Blocks": 8_000,
-        }
-        issues = check.check(node)
+        })
+        issues = self._check().check(node)
         assert len(issues) == 1
         assert issues[0].type == "index_scan_poor_clustering"
         assert issues[0].severity == "info"
         assert "CLUSTER" in issues[0].message
+        assert "8000 blocks" in issues[0].message
 
     def test_index_only_scan_is_ignored(self):
-        check = IndexRegularScanCheck()
-        node = {
+        node = PlanNode(depth=0, path="0:0", fields={
             "Node Type": "Index Only Scan",
             "Actual Rows": 20_000,
             "Heap Fetches": 18_000,
-        }
-        assert check.check(node) == []
+        })
+        assert self._check().check(node) == []
 
-    def test_gather_info_returns_none_without_rows(self):
-        check = IndexRegularScanCheck()
-        assert check.gather_info({"Node Type": "Index Scan"}) is None
+    def test_zero_rows_is_ignored(self):
+        node = self._node(**{"Actual Rows": 0})
+        assert self._check().check(node) == []
 
-    def test_validate_rule_threshold(self):
-        check = IndexRegularScanCheck(min_rows=100, min_disk_blocks=50)
-        assert check.validate_rule({"actual_rows": 100, "read_blocks": 50}) is True
-        assert check.validate_rule({"actual_rows": 99, "read_blocks": 999}) is False
-        assert check.validate_rule({"actual_rows": 1000, "read_blocks": 49}) is False
+    def test_custom_threshold(self):
+        node = self._node(**{
+            "Actual Rows": 20_000, "Shared Read Blocks": 5_000,
+        })
+        assert self._check(min_disk_blocks="10000").check(node) == []
+        assert len(self._check(min_disk_blocks="1000").check(node)) == 1
 
 class TestPartitionPruningCheck:
     def test_append_with_few_children_is_ok(self):

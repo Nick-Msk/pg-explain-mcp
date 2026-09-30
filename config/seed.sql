@@ -23,7 +23,7 @@ insert into checks (num, database, name, description, enabled) values
     (4,  'postgres', 'DiskSpillHashCheck',    'hash operation using multiple batches',                  1),
     (5,  'postgres', 'NestedLoopCheck',       'Nested Loop with many inner iterations',                 1),
     (6,  'postgres', 'BitmapHeapScanCheck',   'large Bitmap Heap Scan',                                 1),
-    (7,  'postgres', 'IndexRegularScanCheck', 'index scan reading too many blocks for rows returned',   0),
+    (7,  'postgres', 'IndexRegularScanCheck', 'index scan reading too many blocks for rows returned',   1),
     (8,  'postgres', 'IndexOnlyScanCheck',    'index only scan with stale visibility map',              1),
     (9,  'postgres', 'PartitionPruningCheck', 'Append over many partitions — pruning may have failed',  0),
     (10, 'postgres', 'NonSargableCheck',      'non-sargable predicate on an indexed column',            1);

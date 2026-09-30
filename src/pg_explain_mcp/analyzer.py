@@ -893,7 +893,7 @@ class IndexOnlyScanCheck(ParsedPlanCheckBase):
             )
         ]
 
-class IndexRegularScanCheck(PlanCheckBase):
+class IndexRegularScanCheck(ParsedPlanCheckBase):
     """Index Scan reading too many disk blocks for the rows returned.
 
     A plain Index Scan always visits the heap for each matching row.
@@ -917,22 +917,13 @@ class IndexRegularScanCheck(PlanCheckBase):
 
     name = "IndexRegularScanCheck"
     type = "index_scan_poor_clustering"
+    PARAMS = {
+        "min_rows":        int,
+        "min_disk_blocks": int,
+    }
 
-    def __init__(
-        self,
-        min_rows: int = 1000,
-        min_disk_blocks: int = 100,
-        **_ignored: Any,
-    ) -> None:
-        self.min_rows = min_rows
-        self.min_disk_blocks = min_disk_blocks
-
-    def gather_info(
-        self,
-        node: dict[str, Any],
-        parent_type: str = ""
-    ) -> dict[str, Any] | None:
-        if node.get("Node Type") != "Index Scan":
+    def gather_info(self, node: PlanNode) -> dict[str, Any] | None:
+        if node.node_type != "Index Scan":
             return None
         actual_rows = node.get("Actual Rows", 0)
         if actual_rows <= 0:
@@ -945,9 +936,9 @@ class IndexRegularScanCheck(PlanCheckBase):
         }
 
     def validate_rule(self, info: dict[str, Any]) -> bool:
-        if info["actual_rows"] < self.min_rows:
+        if info["actual_rows"] < self.params["min_rows"]:
             return False
-        return info["read_blocks"] >= self.min_disk_blocks
+        return info["read_blocks"] >= self.params["min_disk_blocks"]
 
     def generate_msg(self, info: dict[str, Any]) -> list[Issue]:
         return [
