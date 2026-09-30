@@ -246,3 +246,15 @@ call mcp_explain_tool.fill_non_sargable(5000000);
 | [Non-sargable predicate](pg_non_sargable/sample_non_sargable_trigger.md) | `lower(email) = '...'`, `non_sargable` + `seq_scan` |
 | [After the fix](pg_non_sargable/sample_non_sargable_fixed.md) | functional index on `lower(email)`, back to `Index Scan` |
 
+---
+
+## Combined tuning workflow
+
+End-to-end example across two MCP servers: diagnosis with
+`pg-explain-mcp`, `ANALYZE` + `CREATE INDEX` via a general-purpose
+PostgreSQL MCP server, verification back in `pg-explain-mcp`.
+
+| Example | What it demonstrates |
+|---|---|
+| [Full tuning workflow](combined_tuning/sample_full_tuning_workflow.md) | Bad stats + missing index → two fixes, 229 ms → 67 ms |
+
