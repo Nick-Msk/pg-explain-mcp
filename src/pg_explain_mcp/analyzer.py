@@ -430,9 +430,9 @@ class SeqScanCheck(ParsedPlanCheckBase):
         if node.node_type != "Seq Scan":
             return None
 
-        actual = node.get("Actual Rows", 0)
-        removed = node.get("Rows Removed by Filter", 0)
+        actual, removed = _loop_adjusted_rows(node)
         total_read = actual + removed
+
         if total_read <= 0:
             return None
 
@@ -1293,6 +1293,20 @@ def _is_zero(value: Any) -> bool:
         and value == 0
     )
 
+def _loop_adjusted_rows(node: PlanNode) -> tuple[float, float]:
+    """Return ``(actual_rows, rows_removed_by_filter)`` × ``Actual Loops``.
+
+    In a parallel plan each worker reports its own per-loop counters.
+    Multiplying by ``Actual Loops`` reconstructs the total for the
+    node — what the check actually cares about.
+
+    ``Actual Loops`` is 1 for non-parallel nodes, so this is a no-op
+    in that case.
+    """
+    loops = node.get("Actual Loops", 1) or 1
+    actual = node.get("Actual Rows", 0) * loops
+    removed = node.get("Rows Removed by Filter", 0) * loops
+    return actual, removed
 
 def _parse_plan_impl(
     plan_json: list[dict[str, Any]],

@@ -90,6 +90,22 @@ class TestSeqScanCheck:
         ).check(node)
         assert len(issues) == 1
 
+    def test_parallel_seq_scan_counts_all_loops(self):
+        """Parallel Seq Scan reports per-worker counters; multiply by
+        Actual Loops to get the real total."""
+        node = self._node(**{
+            "Actual Rows": 29,
+            "Rows Removed by Filter": 333_304,
+            "Actual Loops": 3,
+            "Relation Name": "big",
+        })
+        issues = self._check().check(node)
+        assert len(issues) == 1
+        # total = 3 × (29 + 333304) = 999_999
+        assert "999999 rows" in issues[0].message
+        assert "87 returned" in issues[0].message
+        assert "999912 filtered out" in issues[0].message
+
 class TestEstimateMismatchCheck:
     DEFAULTS = {"threshold_ratio": "10.0", "min_rows": "1000"}
 
