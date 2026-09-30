@@ -296,9 +296,9 @@ def explain(sql: str) -> str:
         #report = analyze_plan(plan_json, checks=checks)
         report = new_analyze_plan(plan_json, checks=checks)
 
-        policy = _registry.load_field_policy()
+        config = _registry.load_field_config()
         tree = new_parse_plan(plan_json)
-        report["plan_nodes"] = new_plan_to_list(tree, field_policy=policy)
+        report["plan_nodes"] = new_plan_to_list(tree, field_policy=config)
 
         return json.dumps(report, indent=2, ensure_ascii=False)
     except ValueError as e:

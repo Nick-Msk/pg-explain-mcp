@@ -192,16 +192,15 @@ def new_parse_plan(plan_json: list[dict[str, Any]]) -> PlanNode | None:
 
     return build(plan_json[0].get("Plan", {}), None, 0, "", 0)
 
-
 def new_plan_to_list(
     root: PlanNode | None,
-    field_policy: dict[str, int] | None = None,
+    field_config: dict[str, tuple[str, int]] | None = None,
 ) -> list[dict[str, Any]]:
     """Serialize the tree to a flat, JSON-friendly list.
 
-    Each entry carries id, parent_id, depth, path, children_ids plus
-    the EXPLAIN fields. ``field_policy`` controls filtering:
-    0 = hide, 1 = keep zeros, 999 = drop zeros; None = keep all.
+    ``field_config`` maps ``raw_explain_field → (compact_key, mode)``.
+    Modes: 0=hide, 1=keep zeros, 999=drop zeros. If ``None``,
+    every field is kept under its original name with no filtering.
     """
     if root is None:
         return []
@@ -217,14 +216,24 @@ def new_plan_to_list(
             "path": node.path,
             "children_ids": [],
         }
-        for key, value in node.fields.items():
-            if field_policy is not None:
-                mode = field_policy.get(key, _FIELD_UNKNOWN)
-                if mode == _FIELD_HIDE:
-                    continue
-                if mode != _FIELD_KEEP_ZEROS and _is_zero(value):
-                    continue
-            entry[key] = value
+        for raw, value in node.fields.items():
+            if field_config is not None:
+                spec = field_config.get(raw)
+                if spec is None:
+                    # Unknown field — treat as mode 999.
+                    if _is_zero(value):
+                        continue
+                    entry[raw] = value
+                else:
+                    key, mode = spec
+                    if mode == _FIELD_HIDE:
+                        continue
+                    if mode != _FIELD_KEEP_ZEROS and _is_zero(value):
+                        continue
+                    entry[key] = value
+            else:
+                entry[raw] = value
+
         result.append(entry)
         for child in node.children:
             child_id = visit(child, node_id)
@@ -233,7 +242,6 @@ def new_plan_to_list(
 
     visit(root, None)
     return result
-
 
 def new_format_plan_tree(
     root: PlanNode | None,

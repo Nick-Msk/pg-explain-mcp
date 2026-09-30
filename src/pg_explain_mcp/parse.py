@@ -72,8 +72,8 @@ def _emit(nodes: list[dict], as_json: bool, marker_tabs: int = 5) -> None:
 def _parse_with_policy(plan_json: list, all_fields: bool) -> list:
     if all_fields:
         return parse_plan(plan_json)
-    policy = _registry.load_field_policy()
-    return filtered_parse_plan(plan_json, field_policy=policy)
+    config = _registry.load_field_config()
+    return filtered_parse_plan(plan_json, field_policy=config)
 
 def main() -> int:
     parser = argparse.ArgumentParser(
