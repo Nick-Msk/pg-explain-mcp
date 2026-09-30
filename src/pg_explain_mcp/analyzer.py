@@ -537,59 +537,70 @@ class EstimateMismatchCheck(PlanCheckBase):
             )
         ]
 
-class DiskSpillSortCheck(PlanCheckBase):
-    """Sort spilled to disk, size known.
 
-    Fires when ``Sort Method`` starts with ``external`` and the plan
-    reports the spill size (``Sort Space Type = "Disk"`` and
-    ``Sort Space Used > 0``). The message includes the spill size and
-    a recommended ``work_mem`` value rounded up to the next power of
-    two.
+class DiskSpillSortCheck(ParsedPlanCheckBase):
+    """Sort spilled to disk — work_mem is too small.
+
+    Fires when ``Sort Method`` starts with ``external``. If the plan
+    reports the spill size (``Sort Space Type = "Disk"`` and ``Sort
+    Space Used > 0``), the message includes the size and a rounded-up
+    ``work_mem`` recommendation. Otherwise a generic message is
+    emitted.
 
     ``gather_info`` returns:
 
         {
-            "size_kb": int,
-            "size_mb": float,
+            "size_kb": int,    # 0 when the plan does not report it
+            "size_mb": float,  # 0.0 when the plan does not report it
         }
-
-    ``hash_mem_multiplier`` does **not** apply to sorts — only
-    ``work_mem`` counts.
     """
 
     name = "DiskSpillSortCheck"
     type = "disk_spill_sort"
+    PARAMS = {
+        "min_spill_kb":     int,
+        "min_work_mem_mb":  int,     # bottom of the standard series
+        "headroom_ratio":   float,   # safety margin before rounding up
+    }
 
-    def __init__(self, min_spill_kb: int = 0) -> None:
-        self.min_spill_kb = min_spill_kb
-
-    def gather_info(
-        self,
-        node: dict[str, Any],
-        parent_type: str = ""
-    ) -> dict[str, Any] | None:
+    def gather_info(self, node: PlanNode) -> dict[str, Any] | None:
         method = node.get("Sort Method", "")
         if not method.startswith("external"):
             return None
         used = node.get("Sort Space Used", 0)
-        space_type = node.get("Sort Space Type", "")
-        if not (used and space_type == "Disk"):
-            return None
         return {
             "size_kb": used,
-            "size_mb": used / 1024,
+            "size_mb": used / 1024 if used else 0.0,
         }
 
     def validate_rule(self, info: dict[str, Any]) -> bool:
-        return info["size_kb"] >= self.min_spill_kb
+        return info["size_kb"] >= self.params["min_spill_kb"]
 
     def generate_msg(self, info: dict[str, Any]) -> list[Issue]:
+        if not info["size_kb"]:
+            return [
+                Issue(
+                    severity=SEVERITY_WARNING,
+                    type=self.type,
+                    message=(
+                        "Sort spilled to disk. Increase work_mem. "
+                        "Note: hash_mem_multiplier does NOT apply to "
+                        "sorts — only work_mem counts."
+                    ),
+                    node="Sort",
+                )
+            ]
+
         size_kb = info["size_kb"]
         size_mb = info["size_mb"]
 
-        # round up to the next power of two: 32/64/128/256/512/1024 MB
-        target = 32
-        while target < size_mb * 1.1:
+        # round up to the next power of two: 32/64/128/256/512/1024
+        # Round up to the next power-of-two standard value from the
+        # series {min_work_mem_mb, 2x, 4x, 8x, ...}.
+        target = self.params["min_work_mem_mb"]
+        ceiling = size_mb * self.params["headroom_ratio"]
+
+        while target < ceiling:
             target *= 2
 
         return [

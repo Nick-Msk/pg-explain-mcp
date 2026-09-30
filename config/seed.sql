@@ -19,7 +19,7 @@ insert into tags (name) values
 insert into checks (num, database, name, description, enabled) values
     (1,  'postgres', 'SeqScanCheck',          'sequential scan that discards most rows',                0),
     (2,  'postgres', 'EstimateMismatchCheck', 'planner cardinality misestimate',                        0),
-    (3,  'postgres', 'DiskSpillSortCheck',    'sort spilling to disk',                                  0),
+    (3,  'postgres', 'DiskSpillSortCheck',    'sort spilling to disk',                                  1),
     (4,  'postgres', 'DiskSpillHashCheck',    'hash operation using multiple batches',                  0),
     (5,  'postgres', 'NestedLoopCheck',       'Nested Loop with many inner iterations',                 0),
     (6,  'postgres', 'BitmapHeapScanCheck',   'large Bitmap Heap Scan',                                 1),
@@ -58,7 +58,11 @@ insert into check_params (num, database, param, value, default_value) values
     (1, 'postgres', 'min_filter_ratio',  '0.9',    '0.9'),
     (2, 'postgres', 'threshold_ratio',   '10.0',   '10.0'),
     (2, 'postgres', 'min_rows',          '1000',   '1000'),
+    --
     (3, 'postgres', 'min_spill_kb',      '0',      '0'),
+    (3, 'postgres', 'min_work_mem_mb',   '32',     '32'),
+    (3, 'postgres', 'headroom_ratio',    '1.1',    '1.1'),
+    --
     (4, 'postgres', 'min_batches',       '2',      '2'),
     (5, 'postgres', 'threshold_loops',   '1000',   '1000'),
     -- (5, 'postgres', 'threshold_rows',    '100000', '100000'),

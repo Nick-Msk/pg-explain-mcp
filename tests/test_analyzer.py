@@ -209,49 +209,46 @@ def test_missing_param_raises(self):
         EstimateMismatchCheck(params={"threshold_ratio": "10.0"})
 
 class TestDiskSpillSortCheck:
-    def test_in_memory_sort_is_ok(self):
-        node = {"Node Type": "Sort", "Sort Method": "quicksort"}
-        assert DiskSpillSortCheck().check(node) == []
+    def _check(self, min_spill_kb: int = 0) -> DiskSpillSortCheck:
+        return DiskSpillSortCheck(params={"min_spill_kb": str(min_spill_kb)})
 
-    def test_external_sort_is_reported(self):
-        node = {
+    def test_in_memory_sort_is_ok(self):
+        node = PlanNode(depth=0, path="0:0", fields={
+            "Node Type": "Sort", "Sort Method": "quicksort",
+        })
+        assert self._check().check(node) == []
+
+    def test_sized_spill_is_reported(self):
+        node = PlanNode(depth=0, path="0:0", fields={
             "Node Type": "Sort",
             "Sort Method": "external merge",
             "Sort Space Type": "Disk",
             "Sort Space Used": 221208,
-        }
-        issues = DiskSpillSortCheck().check(node)
+        })
+        issues = self._check().check(node)
         assert len(issues) == 1
         assert issues[0].type == "disk_spill_sort"
-        assert "221208kB" in issues[0].message
         assert "216.0 MB" in issues[0].message
+        assert "256 MB" in issues[0].message
 
-    def test_message_mentions_work_mem_formula(self):
-        node = {
+    def test_unsized_spill_uses_generic_message(self):
+        node = PlanNode(depth=0, path="0:0", fields={
+            "Node Type": "Sort",
+            "Sort Method": "external merge",
+        })
+        issues = self._check().check(node)
+        assert len(issues) == 1
+        assert "Increase work_mem" in issues[0].message
+        assert "hash_mem_multiplier" in issues[0].message
+
+    def test_min_spill_threshold_suppresses_small(self):
+        node = PlanNode(depth=0, path="0:0", fields={
             "Node Type": "Sort",
             "Sort Method": "external merge",
             "Sort Space Type": "Disk",
-            "Sort Space Used": 221208,
-        }
-        issues = DiskSpillSortCheck().check(node)
-        msg = issues[0].message
-        assert "set work_mem to at least" in msg
-        assert "hash_mem_multiplier does not apply" in msg
-        assert "Current work_mem is not part of this calculation" in msg
-
-    def test_message_contains_absolute_value(self):
-        node = {
-            "Node Type": "Sort",
-            "Sort Method": "external merge",
-            "Sort Space Type": "Disk",
-            "Sort Space Used": 221208,
-        }
-        issues = DiskSpillSortCheck().check(node)
-        msg = issues[0].message
-        assert "221208kB" in msg
-        assert "216.0 MB" in msg
-        assert "256 MB" in msg
-        assert "Current work_mem is not part of" in msg
+            "Sort Space Used": 512,
+        })
+        assert self._check(min_spill_kb=1000).check(node) == []
 
 class TestDiskSpillHashCheck:
     def test_single_batch_is_ok(self):

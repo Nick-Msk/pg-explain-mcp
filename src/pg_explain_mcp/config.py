@@ -29,7 +29,7 @@ TARGET_DB_TYPE = os.getenv("TARGET_DB_TYPE", "postgres")
 _REGISTRY: dict[str, type[CheckBase]] = {
 #    "SeqScanCheck":          SeqScanCheck,
 #    "EstimateMismatchCheck": EstimateMismatchCheck,
-#    "DiskSpillSortCheck":    DiskSpillSortCheck,
+    "DiskSpillSortCheck":    DiskSpillSortCheck,
 #    "DiskSpillHashCheck":    DiskSpillHashCheck,
 #    "NestedLoopCheck":       NestedLoopCheck,
     "BitmapHeapScanCheck":   BitmapHeapScanCheck,
