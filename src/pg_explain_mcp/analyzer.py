@@ -762,14 +762,14 @@ class NestedLoopCheck(PlanCheckBase):
             )
         ]
 
-class BitmapHeapScanCheck(PlanCheckBase):
+class BitmapHeapScanCheck(ParsedPlanCheckBase):
     """Large Bitmap Heap Scan.
 
     A Bitmap Heap Scan is the right strategy for medium selectivity:
-    too many rows for an index scan, too few for a sequential scan.
-    But when the scan processes a very large number of rows, the heap
-    fetches dominate — often a sign that a composite index or
-    partitioning would reduce the amount of heap I/O.
+    too many rows for an index scan, too few for a full sequential
+    scan. When the scan processes a very large number of rows, the
+    heap fetches dominate — often a sign that a composite index or
+    partitioning would reduce I/O.
 
     ``gather_info`` returns:
 
@@ -778,22 +778,16 @@ class BitmapHeapScanCheck(PlanCheckBase):
             "relation": str,
         }
 
-    Fires at ``INFO`` level: the scan itself is not wrong, it is
+    Fires at ``INFO`` level — the scan itself is not wrong, it is
     simply worth investigating at scale.
     """
 
     name = "BitmapHeapScanCheck"
     type = "bitmap_heap_scan"
+    PARAMS = {"threshold_rows": int}
 
-    def __init__(self, threshold_rows: int = 100_000) -> None:
-        self.threshold_rows = threshold_rows
-
-    def gather_info(
-        self,
-        node: dict[str, Any],
-        parent_type: str = ""
-    ) -> dict[str, Any] | None:
-        if node.get("Node Type") != "Bitmap Heap Scan":
+    def gather_info(self, node: PlanNode) -> dict[str, Any] | None:
+        if node.node_type != "Bitmap Heap Scan":
             return None
         return {
             "rows": node.get("Actual Rows", 0),
@@ -801,7 +795,7 @@ class BitmapHeapScanCheck(PlanCheckBase):
         }
 
     def validate_rule(self, info: dict[str, Any]) -> bool:
-        return info["rows"] > self.threshold_rows
+        return info["rows"] > self.params["threshold_rows"]
 
     def generate_msg(self, info: dict[str, Any]) -> list[Issue]:
         return [

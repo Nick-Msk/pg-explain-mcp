@@ -32,7 +32,7 @@ _REGISTRY: dict[str, type[CheckBase]] = {
 #    "DiskSpillSortCheck":    DiskSpillSortCheck,
 #    "DiskSpillHashCheck":    DiskSpillHashCheck,
 #    "NestedLoopCheck":       NestedLoopCheck,
-#    "BitmapHeapScanCheck":   BitmapHeapScanCheck,
+    "BitmapHeapScanCheck":   BitmapHeapScanCheck,
 #    "IndexRegularScanCheck": IndexRegularScanCheck,
 #    "IndexOnlyScanCheck":    IndexOnlyScanCheck,
 #    "PartitionPruningCheck": PartitionPruningCheck,

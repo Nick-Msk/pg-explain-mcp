@@ -403,60 +403,53 @@ class TestNestedLoopCheck:
 
 class TestBitmapHeapScanCheck:
     def test_small_bitmap_is_ok(self):
-        node = {
+        check = BitmapHeapScanCheck(params={"threshold_rows": "100000"})
+        node = PlanNode(depth=0, path="0:0", fields={
             "Node Type": "Bitmap Heap Scan",
             "Actual Rows": 1000,
             "Relation Name": "t",
-        }
-        assert BitmapHeapScanCheck().check(node) == []
+        })
+        assert check.check(node) == []
 
     def test_large_bitmap_is_reported(self):
-        node = {
+        check = BitmapHeapScanCheck(params={"threshold_rows": "100000"})
+        node = PlanNode(depth=0, path="0:0", fields={
             "Node Type": "Bitmap Heap Scan",
             "Actual Rows": 500_000,
             "Relation Name": "events",
-        }
-        issues = BitmapHeapScanCheck().check(node)
+        })
+        issues = check.check(node)
         assert len(issues) == 1
         assert issues[0].type == "bitmap_heap_scan"
         assert issues[0].severity == "info"
         assert "events" in issues[0].message
 
     def test_boundary_value_is_ok(self):
-        node = {
+        check = BitmapHeapScanCheck(params={"threshold_rows": "100000"})
+        node = PlanNode(depth=0, path="0:0", fields={
             "Node Type": "Bitmap Heap Scan",
             "Actual Rows": 100_000,
             "Relation Name": "t",
-        }
-        assert BitmapHeapScanCheck().check(node) == []
+        })
+        assert check.check(node) == []
 
     def test_other_node_type_is_ignored(self):
-        node = {"Node Type": "Index Scan", "Actual Rows": 999_999}
-        assert BitmapHeapScanCheck().check(node) == []
+        check = BitmapHeapScanCheck(params={"threshold_rows": "100000"})
+        node = PlanNode(depth=0, path="0:0", fields={
+            "Node Type": "Index Scan",
+            "Actual Rows": 999_999,
+        })
+        assert check.check(node) == []
 
     def test_missing_relation_name_does_not_crash(self):
-        node = {"Node Type": "Bitmap Heap Scan", "Actual Rows": 200_000}
-        issues = BitmapHeapScanCheck().check(node)
+        check = BitmapHeapScanCheck(params={"threshold_rows": "100000"})
+        node = PlanNode(depth=0, path="0:0", fields={
+            "Node Type": "Bitmap Heap Scan",
+            "Actual Rows": 200_000,
+        })
+        issues = check.check(node)
         assert len(issues) == 1
         assert "?" in issues[0].message
-
-    def test_gather_info_returns_none_for_wrong_node(self):
-        check = BitmapHeapScanCheck()
-        assert check.gather_info({"Node Type": "Seq Scan"}) is None
-
-    def test_gather_info_extracts_fields(self):
-        check = BitmapHeapScanCheck()
-        info = check.gather_info({
-            "Node Type": "Bitmap Heap Scan",
-            "Actual Rows": 5000,
-            "Relation Name": "orders",
-        })
-        assert info == {"rows": 5000, "relation": "orders"}
-
-    def test_validate_rule_threshold(self):
-        check = BitmapHeapScanCheck(threshold_rows=1000)
-        assert check.validate_rule({"rows": 1001, "relation": "t"}) is True
-        assert check.validate_rule({"rows": 1000, "relation": "t"}) is False
 
 class TestIndexOnlyScanCheck:
     def test_few_heap_fetches_is_ok(self):
