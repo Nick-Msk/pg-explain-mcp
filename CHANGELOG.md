@@ -7,17 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+(no changes yet)
+
+## [0.5.0] — 2026-10-01
+
 ### Added
 
 - **`PlanNode` and the `new_*` migration layer.**
-  `parse_plan` now returns a linked tree of `PlanNode` objects with
+  `new_parse_plan` returns a linked tree of `PlanNode` objects with
   direct `parent` / `children` references — the Python equivalent of
-  `struct PlanNode` in C. Parallel helpers `new_parse_plan`,
-  `new_plan_to_list`, `new_format_plan_tree`, `new_analyze_plan`
-  exist alongside the legacy API; the old `parse_plan`,
-  `analyze_plan`, `format_plan_tree`, `PlanCheckBase` stay until
-  every check migrates, then get removed.
-
+  `struct PlanNode` in C. The pipeline is now `new_parse_plan` →
+  `new_plan_to_list` / `new_format_plan_tree` / `new_analyze_plan`;
+  the legacy `parse_plan`, `filtered_parse_plan`, `format_plan_tree`,
+  `analyze_plan`, `_walk_plan`, `PlanCheckBase`, and the `PlanCheck`
+  protocol are gone (see *Removed* below).
 - **`ParsedPlanCheckBase`.** New base class for checks that receive
   a `PlanNode` and can navigate the whole tree. Same three-phase
   shape as the legacy base: `gather_info` → `validate_rule` →
@@ -98,6 +101,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "wraps 'email' in 'lower(...)'" instead of the generic "wraps
   'email' in a function".
 
+- **All 10 checks migrated to `ParsedPlanCheckBase`.**
+  `PartitionPruningCheck` — the last holdout — now takes
+  `max_children` through `PARAMS` (SQLite-driven, coerced by
+  `CheckBase.__init__`), reads `node.node_type` / `node.children`
+  instead of a raw dict, and drops the `parent_type` argument from
+  `gather_info`. The analyzer no longer needs the legacy
+  dict-walking base class; see *Removed*.
+
 ### Fixed
 
 - **`get_indexes` on schema-qualified names** — the previous
@@ -121,6 +132,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`--init` is idempotent** — drops and rebuilds `checks.db`
   instead of failing on UNIQUE violations.
+
+### Removed
+
+- **Legacy plan-analysis API.** With every check on
+  `ParsedPlanCheckBase`, the old dict-walking infrastructure is
+  removed: `parse_plan`, `filtered_parse_plan`, `format_plan_tree`,
+  `analyze_plan`, `_walk_plan`, `_parse_plan_impl`,
+  `_STRUCTURAL_KEYS`, `PlanCheckBase`, and the `PlanCheck` protocol.
+  Consumers switch to `new_parse_plan`, `new_plan_to_list`,
+  `new_format_plan_tree`, `new_analyze_plan`, and
+  `ParsedPlanCheckBase`. `summarize_plan_node` stays — it is
+  orthogonal to the analyze pipeline and feeds the summarizer path.
 
 ## [0.4.0] — 2026-09-27
 
@@ -431,5 +454,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.2.0]: https://github.com/Nick-Msk/pg-explain-mcp/compare/v0.1.0...v0.2.0
 [0.3.0]: https://github.com/Nick-Msk/pg-explain-mcp/compare/v0.2.0...v0.3.0
 [0.4.0]: https://github.com/Nick-Msk/pg-explain-mcp/compare/v0.3.0...v0.4.0
-[Unreleased]: https://github.com/Nick-Msk/pg-explain-mcp/compare/v0.4.0...HEAD
-
+[0.5.0]: https://github.com/Nick-Msk/pg-explain-mcp/compare/v0.4.0...v0.5.0
+[Unreleased]: https://github.com/Nick-Msk/pg-explain-mcp/compare/v0.5.0...HEAD
