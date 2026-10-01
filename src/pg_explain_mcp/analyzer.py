@@ -9,7 +9,7 @@ import re
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from dataclasses import asdict, dataclass, field, replace
-from typing import Any, Protocol
+from typing import Any
 
 from pg_explain_mcp.db import get_indexes
 
@@ -329,65 +329,6 @@ def new_analyze_plan(
 # ---------------------------------------------------------------------------
 # Checks (adapters)
 # ---------------------------------------------------------------------------
-
-class PlanCheck(Protocol):
-    """Structural type for anything the analyzer can run.
-
-    Any object with ``name``, ``type``, and ``check(node)`` satisfies
-    this protocol — no inheritance required. Used for typing in
-    ``analyze_plan`` and ``_walk_plan``.
-    """
-
-    name: str
-    type: str
-
-    def check(self, node: dict[str, Any]) -> list[Issue]:
-        ...
-
-class PlanCheckBase(CheckBase):
-    """Base for single-rule checks split into three phases.
-
-    - ``gather_info(node)`` extracts values needed to decide. Return
-      ``None`` if the node is not applicable (wrong node type,
-      missing fields, etc.). The returned dict is a private contract
-      of the check — document its keys in the subclass docstring.
-    - ``validate_rule(info)`` returns True if the check should fire.
-    - ``generate_msg(info)`` builds the issues for a positive match.
-
-    ``check()`` runs the phases in order and short-circuits on the
-    first ``None`` or ``False``. Subclasses must implement all three
-    ``@abstractmethod`` — ``ABC`` prevents instantiation otherwise.
-    """
-
-    name: str
-    type: str
-
-    def check(
-        self,
-        node: dict[str, Any],
-        parent_type: str = "",
-    ) -> list[Issue]:
-        info = self.gather_info(node, parent_type)
-        if info is None or not self.validate_rule(info):
-            return []
-        return self.generate_msg(info)
-
-    @abstractmethod
-    def gather_info(
-        self,
-        node: dict[str, Any],
-        parent_type: str = "",
-    ) -> dict[str, Any] | None:
-        ...
-
-    @abstractmethod
-    def validate_rule(self, info: dict[str, Any]) -> bool:
-        ...
-
-    @abstractmethod
-    def generate_msg(self, info: dict[str, Any]) -> list[Issue]:
-        ...
-
 
 class SeqScanCheck(ParsedPlanCheckBase):
     """Sequential scan that discards most of what it reads.
@@ -1195,57 +1136,6 @@ class NonSargableCheck(ParsedPlanCheckBase):
 # ---------------------------------------------------------------------------
 
 
-def _walk_plan(
-    node: dict[str, Any],
-    issues: list[Issue],
-    checks: tuple[PlanCheck, ...],
-    depth: int = 0,
-    parent_node: str = ""
-) -> None:
-    """Recursively traverse the plan tree, applying every check to each node."""
-    for check in checks:
-        for issue in check.check(node, parent_node):
-            issues.append(issue.with_context(depth, parent_node))
-
-    node_type = node.get("Node Type", "?")
-    for child in node.get("Plans", []):
-        _walk_plan(child, issues, checks, depth + 1, node_type)
-
-def analyze_plan(
-    plan_json: list[dict[str, Any]],
-    checks: tuple[PlanCheck, ...],
-) -> dict[str, Any]:
-    """Analyze a JSON execution plan and return a structured report.
-
-    Args:
-        plan_json: The JSON plan returned by ``EXPLAIN (FORMAT JSON)``.
-        checks:    A tuple of adapters to apply. Defaults to ``DEFAULT_CHECKS``.
-
-    Returns:
-        A dict with timing, a list of issues, and a short summary.
-    """
-    if not plan_json:
-        return {"issues": [], "summary": "Empty plan"}
-
-    root = plan_json[0]
-    plan_tree = root.get("Plan", {})
-    execution_time = root.get("Execution Time", 0)
-    planning_time = root.get("Planning Time", 0)
-
-    issues: list[Issue] = []
-    _walk_plan(plan_tree, issues, checks)
-
-    return {
-        "checks_applied": [c.name for c in checks],
-        "execution_time_ms": execution_time,
-        "planning_time_ms": planning_time,
-        "total_time_ms": execution_time + planning_time,
-        "issues": [issue.to_dict() for issue in issues],
-        "issue_count": len(issues),
-        "summary": _make_summary(issues, execution_time)
-    }
-
-
 def _make_summary(issues: list[Issue], exec_time: float) -> str:
     """Build a short human-readable summary for the LLM."""
     if not issues:
@@ -1284,133 +1174,6 @@ def _loop_adjusted_rows(node: PlanNode) -> tuple[float, float]:
     actual = node.get("Actual Rows", 0) * loops
     removed = node.get("Rows Removed by Filter", 0) * loops
     return actual, removed
-
-def _parse_plan_impl(
-    plan_json: list[dict[str, Any]],
-    *,
-    field_policy: dict[str, int] | None,
-) -> list[dict[str, Any]]:
-    """Shared parser.
-
-    ``field_policy`` maps EXPLAIN field names to a mode
-    (0 / 1 / 999). If ``None``, no filtering — every field is kept
-    verbatim, including zeros.
-    """
-    if not plan_json:
-        return []
-
-    policy = field_policy
-    root = plan_json[0].get("Plan", {})
-    nodes: list[dict[str, Any]] = []
-
-    def visit(node, parent_id, depth, parent_path, sibling_index):
-        node_id = len(nodes)
-        segment = f"{depth}:{sibling_index}"
-        path = f"{parent_path}/{segment}" if parent_path else segment
-
-        entry: dict[str, Any] = {
-            "id": node_id,
-            "parent_id": parent_id,
-            "depth": depth,
-            "path": path,
-            "children_ids": [],
-        }
-        for key, value in node.items():
-            if key == "Plans":
-                continue
-            if policy is not None:
-                mode = policy.get(key, _FIELD_UNKNOWN)
-                if mode == _FIELD_HIDE:
-                    continue
-                if mode != _FIELD_KEEP_ZEROS and _is_zero(value):
-                    continue
-            entry[key] = value
-        nodes.append(entry)
-
-        for i, child in enumerate(node.get("Plans", [])):
-            child_id = visit(child, node_id, depth + 1, path, i)
-            entry["children_ids"].append(child_id)
-
-        return node_id
-
-    visit(root, None, 0, "", 0)
-    return nodes
-
-
-def parse_plan(plan_json: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Parse into a flat tree — every field, verbatim.
-
-    No filtering: zeros, hidden fields, noise — everything is kept.
-    Use when you need the raw, faithful representation.
-    """
-    return _parse_plan_impl(plan_json, field_policy=None)
-
-
-def filtered_parse_plan(
-    plan_json: list[dict[str, Any]],
-    field_policy: dict[str, int] | None = None,
-) -> list[dict[str, Any]]:
-    """Parse into a flat tree, filtering fields by policy.
-
-    ``field_policy`` maps EXPLAIN field names to a mode:
-
-    - ``0``   — hide the field entirely (noise like ``Parallel
-      Aware`` when false).
-    - ``1``   — keep the field including zero values (``Heap
-      Fetches``, ``Temp Read Blocks`` — a zero there carries signal).
-    - ``999`` — unknown: keep, drop numeric zeros.
-
-    Fields not listed default to mode 999. An empty or ``None``
-    policy is equivalent to "keep everything, drop numeric zeros".
-    """
-    return _parse_plan_impl(plan_json, field_policy=field_policy or {})
-
-_STRUCTURAL_KEYS = frozenset(
-    {"id", "parent_id", "depth", "path", "children_ids", "Node Type"}
-)
-
-def format_plan_tree(
-    nodes: list[dict[str, Any]],
-    marker_tabs: int = 5,
-) -> str:
-    """Render a parsed plan tree as indented text.
-
-    Format:
-
-        Limit             [0:0]
-          Plan Rows: 1000
-          Actual Rows: 1000.0
-          Index Scan      [1:0]
-            Index Name: idx_...
-            Relation Name: t
-
-    Args:
-        nodes: flat node list from ``parse_plan``.
-        marker_tabs: number of tab characters between the node type and
-            the ``[depth:sibling]`` marker. Increase for wider
-            terminals or when node names are long.
-    """
-    if not nodes:
-        return "(empty plan)"
-
-    by_id = {n["id"]: n for n in nodes}
-    pad = "\t" * marker_tabs
-    lines: list[str] = []
-
-    def render(node_id: int) -> None:
-        node = by_id[node_id]
-        base = "  " * node["depth"]
-        marker = node["path"].rsplit("/", 1)[-1]
-        lines.append(f"{base}{node['Node Type']}{pad}[{marker}]")
-        for key, value in node.items():
-            if key in _STRUCTURAL_KEYS:
-                continue
-            lines.append(f"{base}  {key}: {value}")
-        for child_id in node["children_ids"]:
-            render(child_id)
-
-    render(0)
-    return "\n".join(lines)
 
 def summarize_plan_node(
     node: dict[str, Any],

@@ -26,14 +26,15 @@ import sys
 from pathlib import Path
 
 from pg_explain_mcp.analyzer import (
-    filtered_parse_plan,
-    format_plan_tree,
-    parse_plan,
+    new_format_plan_tree,
+    new_parse_plan,
+    new_plan_to_list,
 )
 from pg_explain_mcp.config import DEFAULT_DB, CheckRegistry
 from pg_explain_mcp.db import explain_query
 
 _registry = CheckRegistry(DEFAULT_DB)
+
 
 def _read_file(path: str) -> str:
     """Read a file, or stdin if ``path`` is ``-``."""
@@ -62,18 +63,25 @@ def _resolve_sql(arg: str | None) -> str | None:
     return None
 
 
-def _emit(nodes: list[dict], as_json: bool, marker_tabs: int = 5) -> None:
+def _emit(root, field_config, as_json: bool, marker_tabs: int = 5) -> None:
     if as_json:
+        nodes = new_plan_to_list(root, field_config=field_config)
         print(json.dumps(nodes, indent=2, ensure_ascii=False))
     else:
-        print(format_plan_tree(nodes, marker_tabs=marker_tabs))
+        print(new_format_plan_tree(
+            root, field_config=field_config, marker_tabs=marker_tabs,
+        ))
 
 
-def _parse_with_policy(plan_json: list, all_fields: bool) -> list:
+def _field_config(all_fields: bool):
+    """``None`` means "keep everything, no filtering" — that is what
+    ``--all-fields`` asks for, and it is what the ``new_*`` pipeline
+    expects when no policy is applied.
+    """
     if all_fields:
-        return parse_plan(plan_json)
-    config = _registry.load_field_config()
-    return filtered_parse_plan(plan_json, field_policy=config)
+        return None
+    return _registry.load_field_config()
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(
@@ -160,8 +168,9 @@ def main() -> int:
             print(f"error: input is not valid JSON: {e}", file=sys.stderr)
             return 1
 
-        nodes = _parse_with_policy(plan_json, args.all_fields)
-        _emit(nodes, args.json, args.marker_tabs)
+        root = new_parse_plan(plan_json)
+        _emit(root, _field_config(args.all_fields),
+              args.json, args.marker_tabs)
 
         return 0
 
@@ -198,8 +207,9 @@ def main() -> int:
         )
         return 1
 
-    nodes = _parse_with_policy(raw["QUERY PLAN"], args.all_fields)
-    _emit(nodes, args.json, args.marker_tabs)
+    root = new_parse_plan(raw["QUERY PLAN"])
+    _emit(root, _field_config(args.all_fields),
+          args.json, args.marker_tabs)
 
     return 0
 
