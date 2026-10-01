@@ -7,22 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
+(no changes yet)
 
-- **`config_example/` renamed to `config_mcp/`.** The directory
-  holds Continue.dev MCP server registration and agent prompt
-  examples. README and cross-references updated.
-
-- **Config audit log.** `config_audit` records every change to
-  `checks.enabled`, `check_params.value`, `plan_fields.enabled`, and
-  `plan_fields.key`, populated automatically by triggers. Each row
-  carries `optype` (`I` / `U` / `D`) plus old/new values, so inserts
-  and deletes are distinguishable from updates that set NULL. The
-  new MCP tool
-  `history_checker_values(table_name, column_name, optype, count)`
-  exposes the log; empty filters are wildcards, `count = 0` returns
-  everything. `config_audit` survives `--init` — the rebuild drops
-  seed tables only.
+## [0.5.1] — 2026-10-01
 
 ### Added
 
@@ -44,6 +31,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `_REGISTRY[checker]` returns the check *class*, not a
   `(class, {param: type})` pair; validation raised `TypeError`
   before it could parse the value. Now reads `cls.PARAMS` directly.
+
+### Changed
+
+- **`--init` preserves the audit log.** `init_db` no longer deletes
+  `config/checks.db`; it drops the seed tables only and rebuilds
+  them from `schema.sql` + `seed.sql`. `config_audit` and
+  `_audit_session` survive. Caveat: `--init` still resets every
+  param to its seed default.
+- **`seed.sql` tags its inserts with `who = 'seed'`.** The audit log
+  can distinguish seed reloads from real config changes; MCP output
+  hides them by default.
 
 ## [0.5.0] — 2026-10-01
 
@@ -491,4 +489,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.3.0]: https://github.com/Nick-Msk/pg-explain-mcp/compare/v0.2.0...v0.3.0
 [0.4.0]: https://github.com/Nick-Msk/pg-explain-mcp/compare/v0.3.0...v0.4.0
 [0.5.0]: https://github.com/Nick-Msk/pg-explain-mcp/compare/v0.4.0...v0.5.0
-[Unreleased]: https://github.com/Nick-Msk/pg-explain-mcp/compare/v0.5.0...HEAD
+[0.5.1]: https://github.com/Nick-Msk/pg-explain-mcp/compare/v0.5.0...v0.5.1
+[Unreleased]: https://github.com/Nick-Msk/pg-explain-mcp/compare/v0.5.1...HEAD
