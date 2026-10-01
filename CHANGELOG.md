@@ -7,7 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-(no changes yet)
+### Changed
+
+- **`config_example/` renamed to `config_mcp/`.** The directory
+  holds Continue.dev MCP server registration and agent prompt
+  examples. README and cross-references updated.
 
 ## [0.5.0] — 2026-10-01
 

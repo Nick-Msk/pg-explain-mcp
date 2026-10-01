@@ -29,40 +29,54 @@ do* about it, instead of just describing the SQL.
   analysis: `work_mem`, `hash_mem_multiplier`, `shared_buffers`,
   `effective_cache_size`, `random_page_cost`, `seq_page_cost`,
   parallel worker limits, `jit`.
+- **`list_relation_info`** — `pg_class` metadata: sizes, row/page
+  counts, column/index counts, owner, persistence, tablespace, comment.
+- **`list_relation_stats`** — `pg_stat_user_tables` counters combined
+  with `pg_class` estimates (`reltuples`, `relpages`, `relallvisible`).
+- **`list_column_stats`** — per-column planner statistics from
+  `pg_stats`: `null_frac`, `avg_width`, `n_distinct`, `correlation`,
+  `most_common_vals`, `most_common_freqs`, `histogram_bounds`.
+- **`show_params`**, **`set_checker_value`**, **`reset_checker_value`** —
+  runtime check management without editing the SQLite database by hand.
 - **`ping`** — health check.
 
 ### Checks
 
 Every `explain` response includes an `issues` array. Each entry is
-produced by an independent, pluggable `PlanCheck`:
+produced by an independent, pluggable check — a subclass of
+`ParsedPlanCheckBase`:
 
-| Check                    | What it reports                                         |
-|--------------------------|---------------------------------------------------------|
-| `SeqScanCheck`           | Sequential scan that discards most of what it reads     |
-| `IndexScanCheck`         | Stale visibility map / poor heap locality               |
-| `BitmapHeapScanCheck`    | Large Bitmap Heap Scan                                  |
-| `DiskSpillSortCheck`     | Sort spilling to disk (`external merge`)                |
-| `DiskSpillHashCheck`     | Hash operation using multiple batches                   |
-| `NestedLoopCheck`        | Nested Loop with a high number of inner iterations      |
-| `EstimateMismatchCheck`  | Planner cardinality misestimate                         |
-| `PartitionPruningCheck`  | `Append` over many partitions — pruning may have failed |
-| `NonSargableCheck`       | Predicate wraps an indexed column in a function         |
+| Check                     | What it reports                                         |
+|---------------------------|---------------------------------------------------------|
+| `SeqScanCheck`            | Sequential scan that discards most of what it reads     |
+| `IndexRegularScanCheck`   | Index Scan reading too many blocks — poor clustering    |
+| `IndexOnlyScanCheck`      | Index Only Scan with a stale visibility map             |
+| `BitmapHeapScanCheck`     | Large Bitmap Heap Scan                                  |
+| `DiskSpillSortCheck`      | Sort spilling to disk (`external merge`)                |
+| `DiskSpillHashCheck`      | Hash operation using multiple batches                   |
+| `NestedLoopCheck`         | Nested Loop with a high number of inner iterations      |
+| `EstimateMismatchCheck`   | Planner cardinality misestimate                         |
+| `PartitionPruningCheck`   | `Append` over many partitions — pruning may have failed |
+| `NonSargableCheck`        | Predicate wraps an indexed column in a function         |
 
-To add a new check, implement the `PlanCheck` protocol in
-`src/pg_explain_mcp/analyzer.py`, register the class in
-`src/pg_explain_mcp/config.py`, and add its default parameters to
-`config/seed.sql`.
+To add a new check, subclass `ParsedPlanCheckBase` in
+`src/pg_explain_mcp/analyzer.py`, implement the three phases
+(`gather_info` → `validate_rule` → `generate_msg`), register the class
+in `src/pg_explain_mcp/config.py`, and add its default parameters to
+`config/seed.sql`. Each subclass declares `name`, `type`, and
+`PARAMS = {param: type}`; values are loaded from the SQLite registry
+and coerced at construction time.
 
 ### Structured plan output
 
 `explain` returns a compact `plan_nodes` tree alongside `issues`.
 Only the fields that matter for reasoning are kept:
 
-- `node_type`, `relation`, `index`
+- `node_type`, `relation_name`, `index_name`
 - `actual_rows`, `plan_rows`, `actual_loops`
 - `rows_removed_by_filter`, `heap_fetches`, `shared_read_blocks`
-- `sort_method`, `sort_space_type`, `sort_space_used_kb`
-- `hash_buckets`, `hash_batches`, `peak_memory_usage_kb`
+- `sort_method`, `sort_space_type`, `sort_space_used`
+- `hash_batches`, `peak_memory_usage`
 - `parallel_aware`
 
 The list of fields is configurable — see [Configuration](#configuration).
@@ -83,7 +97,9 @@ pip install -e .
 ```
 
 `pip install -e .` installs the package in editable mode and registers
-the `pg-explain-mcp` console script.
+three console scripts: `pg-explain-mcp` (the MCP server),
+`pg-explain-parse` (plan parser / CLI), and `pg-explain-config`
+(SQLite registry management).
 
 ### Verify
 
@@ -93,6 +109,37 @@ python -c "from pg_explain_mcp import server; print('OK')"
 
 pytest -v
 ```
+
+## Command-line tools
+
+### `pg-explain-parse`
+
+Runs `EXPLAIN` on a query and prints the plan tree, or parses a saved
+JSON plan offline. Useful for inspecting plans without an MCP client:
+
+```bash
+# SQL as argument
+pg-explain-parse "select * from t limit 10"
+
+# SQL from a file
+pg-explain-parse query.sql
+
+# SQL from stdin
+cat query.sql | pg-explain-parse
+
+# Parse a saved plan JSON instead
+pg-explain-parse --plan plan.json
+cat plan.json | pg-explain-parse --plan -
+
+# Flags
+pg-explain-parse --json              # flat node list as JSON
+pg-explain-parse --no-analyze        # plan only, don't execute
+pg-explain-parse --no-buffers        # skip BUFFERS
+pg-explain-parse --all-fields        # keep zero-valued numeric fields
+pg-explain-parse --marker-tabs 3     # tab padding in the text tree
+
+python -m pg_explain_mcp.config --init   # rebuild from schema + seed
+python -m pg_explain_mcp.config --show   # print current state
 
 ## Configuration
 
@@ -150,14 +197,39 @@ sqlite3 config/checks.db \
 
 The new field appears in `plan_nodes` on the next `explain` call.
 
+
+---
+
+### Plan fields
+
+`plan_fields` controls which EXPLAIN fields appear in `plan_nodes` and
+in the text tree. Each row has a raw EXPLAIN name, a compact `key`,
+and an `enabled` mode:
+
+| `enabled` | Meaning                                                        |
+|-----------|----------------------------------------------------------------|
+| `0`       | Hide the field (`Parallel Aware: false`, `Disabled: false`, `Async Capable: false`). |
+| `1`       | Keep the field even when its value is a numeric zero (`Heap Fetches`, `Rows Removed by Filter`, `Shared Read Blocks`, `Temp Read Blocks`, `Temp Written Blocks`). |
+| `999`     | Auto: keep the field, drop numeric zeros (the default).        |
+
+Fields not listed in `plan_fields` default to `999` and get an
+auto-derived `snake_case` key.
+
+To add a new field:
+
+```bash
+sqlite3 config/checks.db \
+  "insert into plan_fields (database, raw, key, enabled)
+   values ('postgres', 'Total Cost', 'total_cost', 1);"
+
 ## Usage with Continue.dev
 
 Ready-to-use configuration files are available in
-[`config_example/`](config_example/):
+[`config_mcp/`](config_mcp/):
 
-- [`config_example/mcpServers/pg-explain.yaml`](config_example/mcpServers/pg-explain.yaml)
+- [`config_mcp/mcpServers/pg-explain.yaml`](config_mcp/mcpServers/pg-explain.yaml)
   — MCP server registration.
-- [`config_example/postgres-agent.md`](config_example/postgres-agent.md)
+- [`config_mcp/postgres-agent.md`](config_mcp/postgres-agent.md)
   — system prompt for an assistant that knows how to use `pg-explain`
   and a generic PostgreSQL MCP server, with per-check guidance.
 
@@ -182,7 +254,7 @@ The assistant decides which to call based on the question:
 
 All examples in [`usage_examples/`](usage_examples/) were captured with
 both servers loaded. The agent configuration in
-[`config_example/postgres-agent.md`](config_example/postgres-agent.md)
+[`config_mcp/postgres-agent.md`](config_mcp/postgres-agent.md)
 describes both and includes guidance on when to prefer one over the
 other.
 
@@ -205,14 +277,14 @@ cheap path as the default makes the setup more robust.
 
 ### Setup
 
-1. Copy `config_example/mcpServers/pg-explain.yaml` into your
+1. Copy `config_mcp/mcpServers/pg-explain.yaml` into your
    workspace's `.continue/mcpServers/` directory.
 2. Replace the placeholders:
    - `command:` — full path to the Python interpreter inside your
      `.venv`.
    - `PG_USER`, `PG_PASSWORD`, `PG_DATABASE` — your PostgreSQL
      credentials.
-3. (Optional) Copy `config_example/postgres-agent.md` into
+3. (Optional) Copy `config_mcp/postgres-agent.md` into
    `.continue/agents/` to use it as a custom agent prompt.
 4. In VS Code: `Cmd+Shift+P` → **`Continue: Reload Config`**.
 5. Open a new chat in **Agent Mode** (not Chat, not Edit).
@@ -234,7 +306,7 @@ Planning Time:  1.228 ms
 Issues Found:   None
 
 Analysis:
-The plan shows an Index Only Scan on idx_onek1_hundred.
+The plan shows an Index Only Scan on `idx_onek1_hundred`.
 Heap Fetches: 0 — the visibility map is fresh, no heap lookups needed.
 ```
 
@@ -266,7 +338,8 @@ check, with the raw tool output and analysis:
 
 | Check                  | Examples                                                              |
 |------------------------|-----------------------------------------------------------------------|
-| `IndexScanCheck`       | healthy vs. stale visibility map                                      |
+| `IndexOnlyScanCheck`   | healthy vs. stale visibility map                                      |
+| `IndexRegularScanCheck`| warm vs. cold cache
 | `SeqScanCheck`         | with and without an index                                             |
 | `DiskSpillSortCheck`   | in-memory vs. external merge, plus a *precise* `work_mem` variant     |
 | `DiskSpillHashCheck`   | single-batch vs. multi-batch spill, plus a *precise* variant          |
@@ -287,9 +360,10 @@ pg-explain-mcp/
 │   └── pg_explain_mcp/
 │       ├── __init__.py
 │       ├── server.py         # MCP entry point — exposes tools
+│       ├── parse.py          # pg-explain-parse CLI
 │       ├── db.py             # connection + EXPLAIN + schema queries
-│       ├── analyzer.py       # PlanCheck adapters + traversal
-│       └── config.py         # SQLite-backed check registry
+│       ├── analyzer.py       # PlanNode, checks, new_* pipeline
+│       └── config.py         # SQLite-backed check registry + CLI
 ├── config/                   # SQLite config: schema, seed, checks.db
 ├── tests/                    # unit tests for checks and helpers
 ├── fixtures/                 # mcp_explain_tool PostgreSQL extension
@@ -361,7 +435,7 @@ Implementation shape:
 
 ### Multi-database support
 
-The `PlanCheck` interface and the SQLite config are database-agnostic
+The analyzer interface and the SQLite config are database-agnostic
 in principle. The next step is a MySQL/MariaDB adapter and its own
 `plan_fields` / `checks` rows under `TARGET_DB_TYPE=mysql`.
 
