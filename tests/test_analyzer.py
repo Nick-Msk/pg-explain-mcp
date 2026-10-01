@@ -1,6 +1,5 @@
 """Unit tests for the plan analyzer."""
 
-import pytest
 
 from pg_explain_mcp.analyzer import (
     BitmapHeapScanCheck,

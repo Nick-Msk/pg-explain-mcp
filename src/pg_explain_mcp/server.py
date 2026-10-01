@@ -6,14 +6,10 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from pg_explain_mcp.analyzer import (
-    #analyze_plan,
     new_analyze_plan,
     new_format_plan_tree,
-    new_plan_to_list,
     new_parse_plan,
-    filtered_parse_plan,
-    format_plan_tree,
-    summarize_plan_node,
+    new_plan_to_list,
 )
 from pg_explain_mcp.config import (
     DEFAULT_DB,

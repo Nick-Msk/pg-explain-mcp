@@ -6,16 +6,7 @@ config database and its seed state.
 """
 
 from pg_explain_mcp.analyzer import (
-    BitmapHeapScanCheck,
-    DiskSpillHashCheck,
-    DiskSpillSortCheck,
-    EstimateMismatchCheck,
-    IndexOnlyScanCheck,
-    IndexRegularScanCheck,
-    NestedLoopCheck,
     NonSargableCheck,
-    PartitionPruningCheck,
-    SeqScanCheck,
 )
 
 ALL_CHECKS = (

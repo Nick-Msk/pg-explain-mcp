@@ -317,6 +317,7 @@ def new_analyze_plan(
                 issues.append(issue.with_context(node.depth, parent_type))
 
     return {
+        "checks_applied": [c.name for c in checks],
         "execution_time_ms": execution_time,
         "planning_time_ms": planning_time,
         "total_time_ms": execution_time + planning_time,

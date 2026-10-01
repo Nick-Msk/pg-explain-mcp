@@ -16,8 +16,6 @@ from pg_explain_mcp.analyzer import (
     IndexRegularScanCheck,
     NestedLoopCheck,
     NonSargableCheck,
-    PartitionPruningCheck,
-    PlanCheck,
     SeqScanCheck,
 )
 
