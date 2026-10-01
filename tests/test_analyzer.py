@@ -15,11 +15,11 @@ from pg_explain_mcp.analyzer import (
     PartitionPruningCheck,
     PlanNode,
     SeqScanCheck,
-    analyze_plan,
     filtered_parse_plan,
     format_plan_tree,
     new_parse_plan,
-    parse_plan,
+    new_analyze_plan,
+    new_plan_to_list,
     summarize_plan_node,
 )
 from pg_explain_mcp.server import _format_indexes, _format_params
@@ -910,7 +910,7 @@ class TestFormatParams:
 
 class TestAnalyzePlan:
     def test_empty_plan(self):
-        result = analyze_plan([], checks=())
+        result = new_analyze_plan([], checks=())
         assert result["issues"] == []
         assert result["summary"] == "Empty plan"
 
@@ -922,7 +922,7 @@ class TestAnalyzePlan:
                 "Planning Time": 0.1,
             }
         ]
-        result = analyze_plan(plan, checks=ALL_CHECKS)
+        result = new_analyze_plan(plan, checks=ALL_CHECKS)
         assert result["issue_count"] == 0
         assert "No issues found" in result["summary"]
         assert result["total_time_ms"] == 0.6
@@ -941,7 +941,7 @@ class TestAnalyzePlan:
                 "Planning Time": 1.0,
             }
         ]
-        result = analyze_plan(plan, checks=ALL_CHECKS)
+        result = new_analyze_plan(plan, checks=ALL_CHECKS)
         assert result["issue_count"] == 1
         assert result["issues"][0]["type"] == "seq_scan"
 
@@ -969,7 +969,7 @@ class TestAnalyzePlan:
                 "Planning Time": 0.5,
             }
         ]
-        result = analyze_plan(plan, checks=ALL_CHECKS)
+        result = new_analyze_plan(plan, checks=ALL_CHECKS)
         assert result["issue_count"] == 2
 
     def test_custom_checks_registry(self):
@@ -980,7 +980,7 @@ class TestAnalyzePlan:
                 "Planning Time": 0.1,
             }
         ]
-        result = analyze_plan(plan, checks=())
+        result = new_analyze_plan(plan, checks=())
         assert result["issue_count"] == 0
 
     def test_plan_with_bitmap_heap_scan(self):
@@ -996,7 +996,7 @@ class TestAnalyzePlan:
                 "Planning Time": 2.0,
             }
         ]
-        result = analyze_plan(plan, checks=ALL_CHECKS)
+        result = new_analyze_plan(plan, checks=ALL_CHECKS)
         assert result["issue_count"] == 1
         assert result["issues"][0]["type"] == "bitmap_heap_scan"
 
@@ -1015,7 +1015,7 @@ class TestAnalyzePlan:
                 "Planning Time": 1.5,
             }
         ]
-        result = analyze_plan(plan, checks=ALL_CHECKS)
+        result = new_analyze_plan(plan, checks=ALL_CHECKS)
         assert result["issue_count"] == 1
         assert result["issues"][0]["type"] == "index_only_scan_stale_vm"
 
@@ -1029,7 +1029,7 @@ class TestAnalyzePlan:
                 "threshold_rows": "1000",
                 "min_filter_ratio": "0.9",
             })
-            result = analyze_plan(plan, checks=(check,))
+            result = new_analyze_plan(plan, checks=(check,))
             assert result["checks_applied"] == ["SeqScanCheck"]
 
 # ---------------------------------------------------------------------------
@@ -1129,7 +1129,7 @@ class TestFormatIndexes:
 
 class TestParsePlan:
     def test_empty(self):
-        assert parse_plan([]) == []
+        assert new_plan_to_list(new_parse_plan([])) == []
 
     def test_single_node(self):
         plan = [{
@@ -1139,7 +1139,7 @@ class TestParsePlan:
                 "Actual Rows": 100,
             }
         }]
-        nodes = parse_plan(plan)
+        nodes = new_plan_to_list(new_parse_plan(plan))
         assert len(nodes) == 1
         n = nodes[0]
         assert n["id"] == 0
@@ -1159,7 +1159,7 @@ class TestParsePlan:
                 ],
             }
         }]
-        nodes = parse_plan(plan)
+        nodes = new_plan_to_list(new_parse_plan(plan))
         assert len(nodes) == 2
         assert nodes[0]["children_ids"] == [1]
         assert nodes[1]["parent_id"] == 0
@@ -1175,14 +1175,14 @@ class TestParsePlan:
                 ],
             }
         }]
-        nodes = parse_plan(plan)
+        nodes = new_plan_to_list(new_parse_plan(plan))
         assert [n["Node Type"] for n in nodes] == ["A", "B", "D", "C"]
         assert nodes[0]["children_ids"] == [1, 3]
         assert nodes[1]["children_ids"] == [2]
 
     def test_plans_field_not_preserved(self):
         plan = [{"Plan": {"Node Type": "X", "Plans": [{"Node Type": "Y"}]}}]
-        nodes = parse_plan(plan)
+        nodes = new_plan_to_list(new_parse_plan(plan))
         assert "Plans" not in nodes[0]
         assert "Plans" not in nodes[1]
 
@@ -1199,7 +1199,7 @@ class TestParsePlan:
                 "Custom Field": "custom",
             }
         }]
-        n = parse_plan(plan)[0]
+        n = new_plan_to_list(new_parse_plan(plan))[0]
         assert n["Relation Name"] == "t"
         assert n["Index Name"] == "idx_t"
         assert n["Startup Cost"] == 0.42
@@ -1209,7 +1209,7 @@ class TestParsePlan:
 
     def test_root_path(self):
         plan = [{"Plan": {"Node Type": "Limit"}}]
-        assert parse_plan(plan)[0]["path"] == "0:0"
+        assert new_plan_to_list(new_parse_plan(plan))[0]["path"] == "0:0"
 
     def test_paths_in_siblings(self):
         plan = [{
@@ -1221,7 +1221,7 @@ class TestParsePlan:
                 ],
             }
         }]
-        paths = [n["path"] for n in parse_plan(plan)]
+        paths = [n["path"] for n in new_plan_to_list(new_parse_plan(plan)) ]
         assert paths == [
             "0:0",
             "0:0/1:0",
@@ -1234,22 +1234,22 @@ class TestFormatPlanTree:
         assert format_plan_tree([]) == "(empty plan)"
 
     def test_single_node(self):
-        nodes = parse_plan([{
+        nodes = new_plan_to_list(new_parse_plan([{
             "Plan": {"Node Type": "Limit", "Plan Rows": 100}
-        }])
+        }]))
         text = format_plan_tree(nodes, marker_tabs=1)
         lines = text.split("\n")
         assert lines[0] == "Limit\t[0:0]"
         assert "Plan Rows: 100" in text
 
     def test_child_is_indented(self):
-        nodes = parse_plan([{
+        nodes = new_plan_to_list(new_parse_plan([{
             "Plan": {
                 "Node Type": "Limit",
                 "Plan Rows": 100,
                 "Plans": [{"Node Type": "Index Scan", "Plan Rows": 500}],
             }
-        }])
+        }]))
         text = format_plan_tree(nodes, marker_tabs=1)
         lines = text.split("\n")
         assert lines[0] == "Limit\t[0:0]"
@@ -1257,9 +1257,9 @@ class TestFormatPlanTree:
         assert child_line == "  Index Scan\t[1:0]"
 
     def test_structural_fields_not_printed(self):
-        nodes = parse_plan([{
+        nodes = new_plan_to_list(new_parse_plan([{
             "Plan": {"Node Type": "Limit", "Plan Rows": 100}
-        }])
+        }]))
         text = format_plan_tree(nodes)
         assert "id:" not in text
         assert "parent_id:" not in text
@@ -1267,7 +1267,7 @@ class TestFormatPlanTree:
         assert "children_ids:" not in text
 
     def test_siblings_are_distinguished(self):
-        nodes = parse_plan([{
+        nodes = new_plan_to_list(new_parse_plan([{
             "Plan": {
                 "Node Type": "Hash Join",
                 "Plans": [
@@ -1275,7 +1275,7 @@ class TestFormatPlanTree:
                     {"Node Type": "Seq Scan"},
                 ],
             }
-        }])
+        }]))
         text = format_plan_tree(nodes, marker_tabs=1)
         lines = text.split("\n")
         seq_lines = [line for line in lines if "Seq Scan" in line]
@@ -1290,12 +1290,12 @@ class TestFormatPlanTree:
             "Shared Read Blocks": 0,
             "Temp Read Blocks": 0,
         }}]
-        node = parse_plan(plan)[0]
+        node = new_plan_to_list(new_parse_plan(plan))[0]
         assert node["Shared Read Blocks"] == 0
         assert node["Temp Read Blocks"] == 0
 
     def test_depth_increases_with_nesting(self):
-        nodes = parse_plan([{
+        nodes = new_plan_to_list(new_parse_plan([{
             "Plan": {
                 "Node Type": "Limit",
                 "Plans": [{
@@ -1303,7 +1303,7 @@ class TestFormatPlanTree:
                     "Plans": [{"Node Type": "Seq Scan"}],
                 }],
             }
-        }])
+        }]))
         text = format_plan_tree(nodes, marker_tabs=1)
         lines = text.split("\n")
 
