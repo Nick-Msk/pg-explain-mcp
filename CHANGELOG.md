@@ -30,13 +30,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `checks.enabled`, `check_params.value`, `plan_fields.enabled`, and
   `plan_fields.key`, populated automatically by triggers. Each row
   carries `optype` (`I` / `U` / `D`) plus old/new values, so inserts
-  and deletes are distinguishable from updates that set NULL. The
-  new MCP tool
+  and deletes are distinguishable from updates that set NULL. Writers
+  are tagged (`system` / `llm` / `seed`). The new MCP tool
   `history_checker_values(table_name, column_name, optype, count,
   include_seed)` exposes the log; empty filters are wildcards,
   `count = 0` returns everything, seed rows are hidden by default.
   `config_audit` survives `--init` — the rebuild drops seed tables
   only.
+
+### Fixed
+
+- **`_validate_value` unpacked a class instead of a tuple.**
+  `_REGISTRY[checker]` returns the check *class*, not a
+  `(class, {param: type})` pair; validation raised `TypeError`
+  before it could parse the value. Now reads `cls.PARAMS` directly.
 
 ## [0.5.0] — 2026-10-01
 

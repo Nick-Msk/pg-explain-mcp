@@ -39,6 +39,11 @@ do* about it, instead of just describing the SQL.
 - **`show_params`**, **`set_checker_value`**, **`reset_checker_value`** —
   runtime check management without editing the SQLite database by hand.
 - **`ping`** — health check.
+- **`history_checker_values`** — returns the audit log of config
+  changes (`config_audit`), most recent first. Filters: `table_name`,
+  `column_name`, `optype` (`'I'` / `'U'` / `'D'`), `count` (0 = all),
+  `include_seed` (default `False` — seed rows are hidden). Each row
+  carries old/new values and a `who` tag (`system`, `llm`, `seed`).
 
 ### Checks
 
@@ -53,7 +58,6 @@ produced by an independent, pluggable check — a subclass of
 | `IndexOnlyScanCheck`      | Index Only Scan with a stale visibility map             |
 | `BitmapHeapScanCheck`     | Large Bitmap Heap Scan                                  |
 | `DiskSpillSortCheck`      | Sort spilling to disk (`external merge`)                |
-| `DiskSpillHashCheck`      | Hash operation using multiple batches                   |
 | `NestedLoopCheck`         | Nested Loop with a high number of inner iterations      |
 | `EstimateMismatchCheck`   | Planner cardinality misestimate                         |
 | `PartitionPruningCheck`   | `Append` over many partitions — pruning may have failed |
@@ -140,6 +144,12 @@ pg-explain-parse --marker-tabs 3     # tab padding in the text tree
 
 python -m pg_explain_mcp.config --init   # rebuild from schema + seed
 python -m pg_explain_mcp.config --show   # print current state
+
+--init drops and recreates the seed tables only. The audit log
+(config_audit) and the writer tag (_audit_session) survive, so
+the history of config changes is preserved across rebuilds. Note
+that --init resets every param to its seed default — see
+Audit log.
 
 ## Configuration
 
@@ -257,6 +267,59 @@ both servers loaded. The agent configuration in
 [`config_mcp/postgres-agent.md`](config_mcp/postgres-agent.md)
 describes both and includes guidance on when to prefer one over the
 other.
+
+### Audit log
+
+Every change to the config database is recorded in `config_audit`.
+The table is populated automatically by triggers — no application
+code writes to it directly.
+
+**What is tracked:**
+
+| Table          | Column     | Op recorded on        |
+|----------------|------------|-----------------------|
+| `checks`       | `enabled`  | insert / update / delete |
+| `check_params` | `value`    | insert / update / delete |
+| `plan_fields`  | `enabled`  | insert / update / delete |
+| `plan_fields`  | `key`      | insert / update / delete |
+
+**Row shape:** `(id, table_name, column_name, optype, ts, old_value,
+new_value, who)`. `optype` is `'I'` (insert), `'U'` (update), or
+`'D'` (delete) — so a delete and an update-that-sets-NULL are
+distinguishable. `ts` is UTC ISO-8601 with milliseconds.
+
+**Writer tags** (`who`):
+
+| Tag        | Set by                                                         |
+|------------|----------------------------------------------------------------|
+| `system`   | Default. Manual `sqlite3` edits, `--init` overhead.            |
+| `llm`      | MCP calls to `set_checker_value` / `reset_checker_value`.      |
+| `seed`     | `seed.sql` inserts during `--init`. Hidden by default in `history_checker_values`. |
+
+**Reading the log via MCP:**
+
+history_checker_values() # all non-seed rows
+history_checker_values(table_name="check_params") # one table
+history_checker_values(optype="U") # updates only
+history_checker_values(count=20) # newest 20
+history_checker_values(include_seed=True) # include --init noise
+
+**Reading the log via SQL:**
+
+```bash
+sqlite3 config/checks.db \
+  "select ts, optype, table_name, column_name, old_value, new_value, who
+   from config_audit order by id desc limit 20;"
+Survives --init. --init drops and rebuilds the seed tables
+(checks, check_params, plan_fields, tags, databases) but
+leaves config_audit and _audit_session intact. This makes it
+possible to answer "who changed this, and when?" across rebuilds.
+
+Caveat: --init resets every param to its seed default. If you
+had a non-default value in check_params and you re-run --init,
+the value is lost — but the change that produced it is preserved in
+config_audit. Before running --init in a shared environment,
+check history_checker_values() for recent edits.
 
 ### Why not use `pg-explain-mcp` alone?
 
@@ -381,16 +444,6 @@ pg-explain-mcp/
 
 ### Additional checks
 
-- **`PartitionPruningCheck`** — detect queries on partitioned tables
-  that failed to prune partitions. The plan shows `Append` /
-  `Merge Append` with a child count close to the total number of
-  partitions, even when the predicate only matches one or two.
-  Common in production, rarely covered by tutorials.
-- **`NonSargableCheck`** — flag predicates wrapped in functions or
-  casts (`lower(email) = 'x'`, `date_col::text = '2026-01-01'`) that
-  prevent index usage. These show up as `Filter` entries instead of
-  `Index Cond`. Fixable with a functional index or by rewriting the
-  query.
 - **`RepeatedScanCheck`** — report the same relation scanned more
   than once within a single plan (via CTEs, subqueries, or lateral
   joins, not self-joins). Often signals that CTE materialisation or
