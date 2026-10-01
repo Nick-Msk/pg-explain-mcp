@@ -16,6 +16,7 @@ from pg_explain_mcp.analyzer import (
     IndexRegularScanCheck,
     NestedLoopCheck,
     NonSargableCheck,
+    PartitionPruningCheck,
     SeqScanCheck,
 )
 
@@ -33,8 +34,8 @@ _REGISTRY: dict[str, type[CheckBase]] = {
     "BitmapHeapScanCheck":   BitmapHeapScanCheck,
     "IndexRegularScanCheck": IndexRegularScanCheck,
     "IndexOnlyScanCheck":    IndexOnlyScanCheck,
-#    "PartitionPruningCheck": PartitionPruningCheck,
-    "NonSargableCheck":      NonSargableCheck,
+    "PartitionPruningCheck": PartitionPruningCheck,
+    "NonSargableCheck":      NonSargableCheck
 }
 
 # ---------------------------------------------------------------------------

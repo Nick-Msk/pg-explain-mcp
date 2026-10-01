@@ -1,6 +1,8 @@
 """Unit tests for the plan analyzer."""
 
 
+from typing import Any
+
 from pg_explain_mcp.analyzer import (
     BitmapHeapScanCheck,
     DiskSpillHashCheck,
@@ -16,6 +18,7 @@ from pg_explain_mcp.analyzer import (
     analyze_plan,
     filtered_parse_plan,
     format_plan_tree,
+    new_parse_plan,
     parse_plan,
     summarize_plan_node,
 )
@@ -553,7 +556,16 @@ class TestIndexRegularScanCheck:
         assert self._check(min_disk_blocks="10000").check(node) == []
         assert len(self._check(min_disk_blocks="1000").check(node)) == 1
 
+def _root(node: dict[str, Any]) -> PlanNode:
+    """Parse a bare plan dict via the real parser (EXPLAIN JSON shape)."""
+    return new_parse_plan([{"Plan": node}])
+
 class TestPartitionPruningCheck:
+    def _check(self, max_children: int = 3) -> PartitionPruningCheck:
+        return PartitionPruningCheck(
+            params={"max_children": str(max_children)}
+        )
+
     def test_append_with_few_children_is_ok(self):
         node = {
             "Node Type": "Append",
@@ -563,7 +575,7 @@ class TestPartitionPruningCheck:
                 {"Node Type": "Seq Scan", "Relation Name": "t_p08"},
             ],
         }
-        assert PartitionPruningCheck().check(node) == []
+        assert self._check().check(_root(node)) == []
 
     def test_append_at_threshold_is_ok(self):
         node = {
@@ -573,7 +585,7 @@ class TestPartitionPruningCheck:
                 for i in range(1, 4)
             ],
         }
-        assert PartitionPruningCheck().check(node) == []
+        assert self._check().check(_root(node)) == []
 
     def test_append_with_many_children_is_reported(self):
         node = {
@@ -583,7 +595,7 @@ class TestPartitionPruningCheck:
                 for i in range(1, 13)
             ],
         }
-        issues = PartitionPruningCheck().check(node)
+        issues = self._check().check(_root(node))
         assert len(issues) == 1
         assert issues[0].severity == "warning"
         assert issues[0].type == "partition_pruning"
@@ -597,7 +609,7 @@ class TestPartitionPruningCheck:
             "Node Type": "Merge Append",
             "Plans": [{"Node Type": "Seq Scan"} for _ in range(10)],
         }
-        issues = PartitionPruningCheck().check(node)
+        issues = self._check().check(_root(node))
         assert len(issues) == 1
         assert issues[0].type == "partition_pruning"
 
@@ -606,38 +618,39 @@ class TestPartitionPruningCheck:
             "Node Type": "Seq Scan",
             "Plans": [{} for _ in range(50)],
         }
-        assert PartitionPruningCheck().check(node) == []
+        assert self._check().check(_root(node)) == []
 
     def test_custom_threshold(self):
         node = {
             "Node Type": "Append",
             "Plans": [{"Node Type": "Seq Scan"} for _ in range(5)],
         }
-        assert PartitionPruningCheck(max_children=10).check(node) == []
-        assert len(PartitionPruningCheck(max_children=3).check(node)) == 1
+        assert self._check(max_children=10).check(_root(node)) == []
+        assert len(self._check(max_children=3).check(_root(node))) == 1
 
     def test_children_without_relation_name(self):
         node = {
             "Node Type": "Append",
             "Plans": [{"Node Type": "Seq Scan"} for _ in range(12)],
         }
-        issues = PartitionPruningCheck().check(node)
+        issues = self._check().check(_root(node))
         assert len(issues) == 1
         assert "Scanned: " in issues[0].message
 
     # ----- phase tests --------------------------------------------------
 
     def test_gather_info_returns_none_for_wrong_node(self):
-        check = PartitionPruningCheck()
-        assert check.gather_info({"Node Type": "Seq Scan"}) is None
+        assert self._check().gather_info(
+            _root({"Node Type": "Seq Scan"})
+        ) is None
 
     def test_gather_info_for_empty_append(self):
-        check = PartitionPruningCheck()
-        info = check.gather_info({"Node Type": "Append", "Plans": []})
+        info = self._check().gather_info(
+            _root({"Node Type": "Append", "Plans": []})
+        )
         assert info == {"count": 0, "names": []}
 
     def test_gather_info_collects_relation_names(self):
-        check = PartitionPruningCheck()
         node = {
             "Node Type": "Merge Append",
             "Plans": [
@@ -646,29 +659,27 @@ class TestPartitionPruningCheck:
                 {"Node Type": "Seq Scan"},
             ],
         }
-        info = check.gather_info(node)
+        info = self._check().gather_info(_root(node))
         assert info["count"] == 3
         assert info["names"] == ["t_p01", "t_p02"]
 
     def test_validate_rule_threshold(self):
-        check = PartitionPruningCheck(max_children=3)
+        check = self._check(max_children=3)
         assert check.validate_rule({"count": 4, "names": []}) is True
         assert check.validate_rule({"count": 3, "names": []}) is False
 
     def test_generate_msg_short_list(self):
-        check = PartitionPruningCheck(max_children=3)
         info = {"count": 5, "names": ["a", "b", "c"]}
-        msg = check.generate_msg(info)[0].message
+        msg = self._check().generate_msg(info)[0].message
         assert "Append over 5 partitions" in msg
         assert "Scanned: a, b, c" in msg
 
     def test_generate_msg_long_list_is_truncated(self):
-        check = PartitionPruningCheck(max_children=3)
         info = {
             "count": 12,
             "names": [f"t_p{i:02d}" for i in range(1, 13)],
         }
-        msg = check.generate_msg(info)[0].message
+        msg = self._check().generate_msg(info)[0].message
         assert "Append over 12 partitions" in msg
         assert "t_p01, t_p02, t_p03" in msg
         assert "… (+9 more)" in msg
@@ -1008,14 +1019,18 @@ class TestAnalyzePlan:
         assert result["issue_count"] == 1
         assert result["issues"][0]["type"] == "index_only_scan_stale_vm"
 
-    def test_checks_applied_is_present(self):
-        plan = [{
-            "Plan": {"Node Type": "Seq Scan", "Actual Rows": 100},
-            "Execution Time": 1.0,
-            "Planning Time": 0.1,
-        }]
-        result = analyze_plan(plan, checks=(SeqScanCheck(),))
-        assert result["checks_applied"] == ["SeqScanCheck"]
+        def test_checks_applied_is_present(self):
+            plan = [{
+                "Plan": {"Node Type": "Seq Scan", "Actual Rows": 100},
+                "Execution Time": 1.0,
+                "Planning Time": 0.1,
+            }]
+            check = SeqScanCheck(params={
+                "threshold_rows": "1000",
+                "min_filter_ratio": "0.9",
+            })
+            result = analyze_plan(plan, checks=(check,))
+            assert result["checks_applied"] == ["SeqScanCheck"]
 
 # ---------------------------------------------------------------------------
 # list_indexes formatting

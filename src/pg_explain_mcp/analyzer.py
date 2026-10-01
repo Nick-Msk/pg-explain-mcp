@@ -957,7 +957,7 @@ class IndexRegularScanCheck(ParsedPlanCheckBase):
             )
         ]
 
-class PartitionPruningCheck(PlanCheckBase):
+class PartitionPruningCheck(ParsedPlanCheckBase):
     """Append / Merge Append over many partitions — pruning may have failed.
 
     On a partitioned table the planner prunes partitions that cannot
@@ -985,30 +985,23 @@ class PartitionPruningCheck(PlanCheckBase):
 
     name = "PartitionPruningCheck"
     type = "partition_pruning"
+    PARAMS = {"max_children": int}
 
-    def __init__(self, max_children: int = 3) -> None:
-        self.max_children = max_children
-
-    def gather_info(
-        self,
-        node: dict[str, Any],
-        parent_type: str = ""
-    ) -> dict[str, Any] | None:
-        if node.get("Node Type") not in ("Append", "Merge Append"):
+    def gather_info(self, node: PlanNode) -> dict[str, Any] | None:
+        if node.node_type not in ("Append", "Merge Append"):
             return None
 
-        children = node.get("Plans", [])
         return {
-            "count": len(children),
+            "count": len(node.children),
             "names": [
                 c.get("Relation Name")
-                for c in children
+                for c in node.children
                 if c.get("Relation Name")
             ],
         }
 
     def validate_rule(self, info: dict[str, Any]) -> bool:
-        return info["count"] > self.max_children
+        return info["count"] > self.params["max_children"]
 
     def generate_msg(self, info: dict[str, Any]) -> list[Issue]:
         names = info["names"]
@@ -1022,7 +1015,7 @@ class PartitionPruningCheck(PlanCheckBase):
                 type=self.type,
                 message=(
                     f"Append over {info['count']} partitions "
-                    f"(threshold: {self.max_children}). "
+                    f"(threshold: {self.params['max_children']}). "
                     "Partition pruning may have failed — check that the "
                     "predicate on the partition key is sargable: no "
                     "function calls, no casts, no expressions. "
@@ -1036,7 +1029,6 @@ class PartitionPruningCheck(PlanCheckBase):
                 node="Append",
             )
         ]
-
 
 class NonSargableCheck(ParsedPlanCheckBase):
     """Non-sargable predicate on a column that has a plain index.

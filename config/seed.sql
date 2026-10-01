@@ -25,7 +25,7 @@ insert into checks (num, database, name, description, enabled) values
     (6,  'postgres', 'BitmapHeapScanCheck',   'large Bitmap Heap Scan',                                 1),
     (7,  'postgres', 'IndexRegularScanCheck', 'index scan reading too many blocks for rows returned',   1),
     (8,  'postgres', 'IndexOnlyScanCheck',    'index only scan with stale visibility map',              1),
-    (9,  'postgres', 'PartitionPruningCheck', 'Append over many partitions — pruning may have failed',  0),
+    (9,  'postgres', 'PartitionPruningCheck', 'Append over many partitions — pruning may have failed',  1),
     (10, 'postgres', 'NonSargableCheck',      'non-sargable predicate on an indexed column',            1);
 
 insert into checks_tags (num, database, tag) values
