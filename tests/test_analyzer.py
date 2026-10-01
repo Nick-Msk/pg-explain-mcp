@@ -15,10 +15,9 @@ from pg_explain_mcp.analyzer import (
     PartitionPruningCheck,
     PlanNode,
     SeqScanCheck,
-    filtered_parse_plan,
-    format_plan_tree,
-    new_parse_plan,
     new_analyze_plan,
+    new_format_plan_tree,
+    new_parse_plan,
     new_plan_to_list,
     summarize_plan_node,
 )
@@ -1019,18 +1018,18 @@ class TestAnalyzePlan:
         assert result["issue_count"] == 1
         assert result["issues"][0]["type"] == "index_only_scan_stale_vm"
 
-        def test_checks_applied_is_present(self):
-            plan = [{
-                "Plan": {"Node Type": "Seq Scan", "Actual Rows": 100},
-                "Execution Time": 1.0,
-                "Planning Time": 0.1,
-            }]
-            check = SeqScanCheck(params={
-                "threshold_rows": "1000",
-                "min_filter_ratio": "0.9",
-            })
-            result = new_analyze_plan(plan, checks=(check,))
-            assert result["checks_applied"] == ["SeqScanCheck"]
+    def test_checks_applied_is_present(self):
+        plan = [{
+            "Plan": {"Node Type": "Seq Scan", "Actual Rows": 100},
+            "Execution Time": 1.0,
+            "Planning Time": 0.1,
+        }]
+        check = SeqScanCheck(params={
+            "threshold_rows": "1000",
+            "min_filter_ratio": "0.9",
+        })
+        result = new_analyze_plan(plan, checks=(check,))
+        assert result["checks_applied"] == ["SeqScanCheck"]
 
 # ---------------------------------------------------------------------------
 # list_indexes formatting
@@ -1230,57 +1229,71 @@ class TestParsePlan:
         ]
 
 class TestFormatPlanTree:
+    @staticmethod
+    def _headers(text: str) -> list[str]:
+        """Node header lines only: indented, end with a ``[depth:sibling]`` marker."""
+        return [
+            line for line in text.split("\n")
+            if "\t[" in line and line.endswith("]")
+        ]
+
     def test_empty(self):
-        assert format_plan_tree([]) == "(empty plan)"
+        assert new_format_plan_tree(new_parse_plan([])) == "(empty plan)"
 
     def test_single_node(self):
-        nodes = new_plan_to_list(new_parse_plan([{
-            "Plan": {"Node Type": "Limit", "Plan Rows": 100}
-        }]))
-        text = format_plan_tree(nodes, marker_tabs=1)
-        lines = text.split("\n")
-        assert lines[0] == "Limit\t[0:0]"
+        text = new_format_plan_tree(
+            new_parse_plan([{
+                "Plan": {"Node Type": "Limit", "Plan Rows": 100}
+            }]),
+            marker_tabs=1,
+        )
+        headers = self._headers(text)
+        assert headers == ["Limit\t[0:0]"]
         assert "Plan Rows: 100" in text
 
     def test_child_is_indented(self):
-        nodes = new_plan_to_list(new_parse_plan([{
-            "Plan": {
-                "Node Type": "Limit",
-                "Plan Rows": 100,
-                "Plans": [{"Node Type": "Index Scan", "Plan Rows": 500}],
-            }
-        }]))
-        text = format_plan_tree(nodes, marker_tabs=1)
-        lines = text.split("\n")
-        assert lines[0] == "Limit\t[0:0]"
-        child_line = next(line for line in lines if "Index Scan" in line)
-        assert child_line == "  Index Scan\t[1:0]"
+        text = new_format_plan_tree(
+            new_parse_plan([{
+                "Plan": {
+                    "Node Type": "Limit",
+                    "Plan Rows": 100,
+                    "Plans": [{"Node Type": "Index Scan", "Plan Rows": 500}],
+                }
+            }]),
+            marker_tabs=1,
+        )
+        headers = self._headers(text)
+        assert headers[0] == "Limit\t[0:0]"
+        assert headers[1] == "  Index Scan\t[1:0]"
 
     def test_structural_fields_not_printed(self):
-        nodes = new_plan_to_list(new_parse_plan([{
-            "Plan": {"Node Type": "Limit", "Plan Rows": 100}
-        }]))
-        text = format_plan_tree(nodes)
+        text = new_format_plan_tree(
+            new_parse_plan([{
+                "Plan": {"Node Type": "Limit", "Plan Rows": 100}
+            }])
+        )
         assert "id:" not in text
         assert "parent_id:" not in text
         assert "depth:" not in text
         assert "children_ids:" not in text
 
     def test_siblings_are_distinguished(self):
-        nodes = new_plan_to_list(new_parse_plan([{
-            "Plan": {
-                "Node Type": "Hash Join",
-                "Plans": [
-                    {"Node Type": "Seq Scan"},
-                    {"Node Type": "Seq Scan"},
-                ],
-            }
-        }]))
-        text = format_plan_tree(nodes, marker_tabs=1)
-        lines = text.split("\n")
-        seq_lines = [line for line in lines if "Seq Scan" in line]
-        assert seq_lines[0] == "  Seq Scan\t[1:0]"
-        assert seq_lines[1] == "  Seq Scan\t[1:1]"
+        text = new_format_plan_tree(
+            new_parse_plan([{
+                "Plan": {
+                    "Node Type": "Hash Join",
+                    "Plans": [
+                        {"Node Type": "Seq Scan"},
+                        {"Node Type": "Seq Scan"},
+                    ],
+                }
+            }]),
+            marker_tabs=1,
+        )
+        headers = self._headers(text)
+        assert headers[0] == "Hash Join\t[0:0]"
+        assert headers[1] == "  Seq Scan\t[1:0]"
+        assert headers[2] == "  Seq Scan\t[1:1]"
 
     def test_parse_plan_keeps_zeros(self):
         """parse_plan is honest — zero fields stay."""
@@ -1295,30 +1308,31 @@ class TestFormatPlanTree:
         assert node["Temp Read Blocks"] == 0
 
     def test_depth_increases_with_nesting(self):
-        nodes = new_plan_to_list(new_parse_plan([{
-            "Plan": {
-                "Node Type": "Limit",
-                "Plans": [{
-                    "Node Type": "Sort",
-                    "Plans": [{"Node Type": "Seq Scan"}],
-                }],
-            }
-        }]))
-        text = format_plan_tree(nodes, marker_tabs=1)
-        lines = text.split("\n")
-
-        # Root — depth 0, path 0:0
-        assert lines[0] == "Limit\t[0:0]"
-
-        # Sort — child of root, first (and only) sibling
-        sort_line = next(line for line in lines if "Sort" in line)
-        assert sort_line == "  Sort\t[1:0]"
-
-        # Seq Scan — grandchild, first (and only) sibling
-        scan_line = next(line for line in lines if "Seq Scan" in line)
-        assert scan_line == "    Seq Scan\t[2:0]"
+        text = new_format_plan_tree(
+            new_parse_plan([{
+                "Plan": {
+                    "Node Type": "Limit",
+                    "Plans": [{
+                        "Node Type": "Sort",
+                        "Plans": [{"Node Type": "Seq Scan"}],
+                    }],
+                }
+            }]),
+            marker_tabs=1,
+        )
+        headers = self._headers(text)
+        assert headers[0] == "Limit\t[0:0]"
+        assert headers[1] == "  Sort\t[1:0]"
+        assert headers[2] == "    Seq Scan\t[2:0]"
 
 class TestFilteredParsePlan:
+    @staticmethod
+    def _parse(plan, policy=None):
+        return new_plan_to_list(
+            new_parse_plan(plan),
+            field_config=policy if policy is not None else {},
+        )
+
     def test_drops_zero_numeric(self):
         plan = [{"Plan": {
             "Node Type": "Limit",
@@ -1326,9 +1340,9 @@ class TestFilteredParsePlan:
             "Shared Read Blocks": 0,
             "Shared Hit Blocks": 5,
         }}]
-        node = filtered_parse_plan(plan)[0]
-        assert "Shared Read Blocks" not in node
-        assert node["Shared Hit Blocks"] == 5
+        node = self._parse(plan)[0]
+        assert "shared_read_blocks" not in node
+        assert node["shared_hit_blocks"] == 5
 
     def test_keeps_booleans(self):
         plan = [{"Plan": {
@@ -1336,32 +1350,32 @@ class TestFilteredParsePlan:
             "Parallel Aware": False,
             "Async Capable": False,
         }}]
-        node = filtered_parse_plan(plan)[0]
-        assert node["Parallel Aware"] is False
-        assert node["Async Capable"] is False
+        node = self._parse(plan)[0]
+        assert node["parallel_aware"] is False
+        assert node["async_capable"] is False
 
     def test_keeps_empty_children_ids(self):
         plan = [{"Plan": {"Node Type": "Index Scan"}}]
-        node = filtered_parse_plan(plan)[0]
+        node = self._parse(plan)[0]
         assert node["children_ids"] == []
 
     def test_keeps_parent_id_null(self):
         plan = [{"Plan": {"Node Type": "Limit"}}]
-        node = filtered_parse_plan(plan)[0]
+        node = self._parse(plan)[0]
         assert node["parent_id"] is None
 
     def test_does_not_drop_false_like_zero(self):
         """False is not a numeric zero — must survive."""
         plan = [{"Plan": {"Node Type": "Limit", "Disabled": False}}]
-        node = filtered_parse_plan(plan)[0]
-        assert node["Disabled"] is False
+        node = self._parse(plan)[0]
+        assert node["disabled"] is False
 
     def test_structural_fields_always_present(self):
         plan = [{"Plan": {
             "Node Type": "Index Scan",
             "Actual Rows": 0,   # dropped as zero
         }}]
-        node = filtered_parse_plan(plan)[0]
+        node = self._parse(plan)[0]
         # structural fields are added after filtering — always there
         assert node["id"] == 0
         assert node["depth"] == 0
@@ -1374,9 +1388,11 @@ class TestFilteredParsePlan:
             "Parallel Aware": True,   # even True is hidden
             "Actual Rows": 10,
         }}]
-        node = filtered_parse_plan(plan, field_policy={"Parallel Aware": 0})[0]
-        assert "Parallel Aware" not in node
-        assert node["Actual Rows"] == 10
+        node = self._parse(
+            plan, {"Parallel Aware": ("parallel_aware", 0)}
+        )[0]
+        assert "parallel_aware" not in node
+        assert node["actual_rows"] == 10
 
     def test_policy_mode_one_keeps_zero(self):
         plan = [{"Plan": {
@@ -1384,10 +1400,13 @@ class TestFilteredParsePlan:
             "Heap Fetches": 0,
             "Shared Read Blocks": 0,
         }}]
-        policy = {"Heap Fetches": 1, "Shared Read Blocks": 1}
-        node = filtered_parse_plan(plan, field_policy=policy)[0]
-        assert node["Heap Fetches"] == 0
-        assert node["Shared Read Blocks"] == 0
+        policy = {
+            "Heap Fetches":       ("heap_fetches", 1),
+            "Shared Read Blocks": ("shared_read_blocks", 1),
+        }
+        node = self._parse(plan, policy)[0]
+        assert node["heap_fetches"] == 0
+        assert node["shared_read_blocks"] == 0
 
     def test_policy_mode_999_drops_zero(self):
         plan = [{"Plan": {
@@ -1395,14 +1414,16 @@ class TestFilteredParsePlan:
             "Sort Space Used": 0,
             "Sort Space Used Other": 5,   # sanity: non-zero kept
         }}]
-        node = filtered_parse_plan(plan, field_policy={"Sort Space Used": 999})[0]
-        assert "Sort Space Used" not in node
-        assert node["Sort Space Used Other"] == 5
+        node = self._parse(
+            plan, {"Sort Space Used": ("sort_space_used", 999)}
+        )[0]
+        assert "sort_space_used" not in node
+        assert node["sort_space_used_other"] == 5
 
     def test_unknown_field_defaults_to_999(self):
         """Fields not in the policy are treated as mode 999."""
         plan = [{"Plan": {"Node Type": "X", "Mystery": 0, "Known": 0}}]
-        node = filtered_parse_plan(plan, field_policy={"Known": 1})[0]
-        assert "Mystery" not in node      # 999 → dropped
-        assert node["Known"] == 0          # 1 → kept
+        node = self._parse(plan, {"Known": ("known", 1)})[0]
+        assert "mystery" not in node      # 999 → dropped
+        assert node["known"] == 0          # 1 → kept
 
