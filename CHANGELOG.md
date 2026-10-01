@@ -13,6 +13,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   holds Continue.dev MCP server registration and agent prompt
   examples. README and cross-references updated.
 
+- **Config audit log.** `config_audit` records every change to
+  `checks.enabled`, `check_params.value`, `plan_fields.enabled`, and
+  `plan_fields.key`, populated automatically by triggers. Each row
+  carries `optype` (`I` / `U` / `D`) plus old/new values, so inserts
+  and deletes are distinguishable from updates that set NULL. The
+  new MCP tool
+  `history_checker_values(table_name, column_name, optype, count)`
+  exposes the log; empty filters are wildcards, `count = 0` returns
+  everything. `config_audit` survives `--init` — the rebuild drops
+  seed tables only.
+
 ## [0.5.0] — 2026-10-01
 
 ### Added

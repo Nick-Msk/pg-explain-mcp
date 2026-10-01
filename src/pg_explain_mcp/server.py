@@ -40,6 +40,23 @@ _registry = CheckRegistry(DEFAULT_DB)
 
 mcp = FastMCP("pg-explain")
 
+def _format_history(rows: list[dict[str, Any]]) -> str:
+    if not rows:
+        return "No config changes recorded."
+
+    _OP = {"I": "INSERT", "U": "UPDATE", "D": "DELETE"}
+    lines = []
+    for r in rows:
+        old = r["old_value"] if r["old_value"] is not None else "∅"
+        new = r["new_value"] if r["new_value"] is not None else "∅"
+        op = _OP.get(r["optype"], r["optype"])
+        lines.append(
+            f"{r['ts']}  {op:<6}  "
+            f"{r['table_name']}.{r['column_name']:<20}  "
+            f"{old!r:>12} → {new!r:<12}  [{r['who']}]"
+        )
+    return "\n".join(lines)
+
 def _extract_index_args(index_def: str) -> str:
     """Extract the argument list from a CREATE INDEX definition.
 
@@ -460,9 +477,10 @@ def set_checker_value(
                  string internally before validation.
     """
     try:
-        result = set_param_impl(
-            checker, param, str(value), database=_registry.target
-        )
+        with _registry.audit_writer("llm"):
+            result = set_param_impl(
+                checker, param, str(value), database=_registry.target
+            )
         return (
             f"{result['checker']}.{result['param']}: "
             f"{result['old']} → {result['new']}"
@@ -482,9 +500,10 @@ def reset_checker_value(checker: str, param: str | None = None) -> str:
                  param of the check.
     """
     try:
-        changes = reset_param_impl(
-            checker, param, database=_registry.target
-        )
+        with _registry.audit_writer("llm"):
+            changes = reset_param_impl(
+                checker, param, database=_registry.target
+            )
         if not changes:
             return "Already at defaults — nothing to reset."
         return "\n".join(
@@ -495,6 +514,37 @@ def reset_checker_value(checker: str, param: str | None = None) -> str:
         return f"Error: {e}"
     except Exception as e:
         return f"Error: {e}"
+
+@mcp.tool()
+def history_checker_values(
+    table_name: str = "",
+    column_name: str = "",
+    optype: str = "",
+    count: int = 0,
+    include_seed: bool = False
+) -> str:
+    """Show the history of configuration changes.
+
+    Reads from ``config_audit``, which is populated automatically by
+    triggers on ``checks``, ``check_params``, and ``plan_fields``.
+
+    Args:
+        table_name:  Filter by table (e.g. ``check_params``).
+                     Empty string matches all tables.
+        column_name: Filter by column (e.g. ``value``).
+                     Empty string matches all columns.
+        optype:      Filter by operation: ``'I'`` (insert),
+                     ``'U'`` (update), ``'D'`` (delete).
+                     Empty string matches all operations.
+        count:       Return only the newest ``count`` rows.
+                     ``0`` (default) returns everything.
+
+    Returns:
+        Most-recent-first, one line per change, with timestamp,
+        operation type, old value, new value, and the writer tag.
+    """
+    rows = _registry.history(table_name, column_name, optype, count, include_seed)
+    return _format_history(rows)
 
 def main() -> None:
     """Entry point for the `pg-explain-mcp` console script."""

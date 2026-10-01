@@ -20,11 +20,102 @@ from pg_explain_mcp.analyzer import (
     SeqScanCheck,
 )
 
+from contextlib import contextmanager
+
 _CONFIG_DIR = Path(__file__).resolve().parent.parent.parent / "config"
 DEFAULT_DB = _CONFIG_DIR / "checks.db"
 TARGET_DB_TYPE = os.getenv("TARGET_DB_TYPE", "postgres")
 
-# class name → (class, {param_name: type})
+@contextmanager
+def audit_writer(who: str, db_path: Path = DEFAULT_DB):
+    """Tag every config write inside the block with ``who``."""
+    _ensure_db(db_path)
+    with sqlite3.connect(db_path) as conn:
+        prev = conn.execute(
+            "select who from _audit_session where id = 1"
+        ).fetchone()[0]
+        conn.execute(
+            "update _audit_session set who = ? where id = 1", (who,)
+        )
+        conn.commit()
+    try:
+        yield
+    finally:
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                "update _audit_session set who = ? where id = 1", (prev,)
+            )
+            conn.commit()
+
+def set_audit_writer(
+    who: str = "system",
+    db_path: Path | str = DEFAULT_DB,
+) -> None:
+    """Tag subsequent config writes with ``who``.
+
+    Writes go to ``_audit_session.who``; triggers read it via a
+    scalar subquery when they insert into ``config_audit``.
+    """
+    db_path = Path(db_path)
+    _ensure_db(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "update _audit_session set who = ? where id = 1",
+            (who,),
+        )
+        conn.commit()
+
+def history(
+    table_name: str = "",
+    column_name: str = "",
+    optype: str = "",
+    count: int = 0,
+    include_seed: bool = False,
+    db_path: Path | str = DEFAULT_DB,
+) -> list[dict[str, Any]]:
+    """Return ``config_audit`` rows, most recent first.
+
+    - empty ``table_name`` / ``column_name`` / ``optype`` are wildcards;
+    - ``optype`` is one of ``'I'`` (insert), ``'U'`` (update),
+      ``'D'`` (delete);
+    - ``count = 0`` means "no limit";
+    - ``count > 0`` limits to the newest N rows.
+    """
+    db_path = Path(db_path)
+    _ensure_db(db_path)
+
+    where: list[str] = []
+    params: list[Any] = []
+    if table_name:
+        where.append("table_name = ?")
+        params.append(table_name)
+    if column_name:
+        where.append("column_name = ?")
+        params.append(column_name)
+    if optype:
+        where.append("optype = ?")
+        params.append(optype)
+    if not include_seed:
+        where.append("who <> 'seed'")
+
+    sql = (
+        "select ts, table_name, column_name, optype, "
+        "       old_value, new_value, who "
+        "from config_audit"
+    )
+    if where:
+        sql += " where " + " and ".join(where)
+    sql += " order by ts desc, id desc"
+    if count > 0:
+        sql += " limit ?"
+        params.append(count)
+
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        return [dict(r) for r in conn.execute(sql, params).fetchall()]
+
+# class name → class. Each class declares its own PARAMS.
 _REGISTRY: dict[str, type[CheckBase]] = {
     "SeqScanCheck":          SeqScanCheck,
     "EstimateMismatchCheck": EstimateMismatchCheck,
@@ -44,23 +135,17 @@ _REGISTRY: dict[str, type[CheckBase]] = {
 
 
 def _validate_value(checker: str, param: str, value: str) -> None:
-    """Ensure the value parses as the type declared in ``_REGISTRY``.
-
-    Raises ``KeyError`` if the check or param is unknown, ``ValueError``
-    if the value cannot be coerced.
-    """
     if checker not in _REGISTRY:
         raise KeyError(f"Unknown checker: {checker}")
-    _, param_types = _REGISTRY[checker]
-    if param not in param_types:
+    cls = _REGISTRY[checker]
+    if param not in cls.PARAMS:
         raise KeyError(f"Unknown param '{param}' for {checker}")
     try:
-        param_types[param](value)
+        cls.PARAMS[param](value)
     except (ValueError, TypeError) as e:
         raise ValueError(
             f"Invalid value {value!r} for {checker}.{param}: {e}"
         ) from e
-
 
 def show_params(
     checker: str | None = None,
@@ -199,12 +284,15 @@ def reset_param(
 # Columns that must exist. If any is missing, the file is stale and
 # gets rebuilt. Keep this list in sync with schema.sql.
 _REQUIRED_COLUMNS: dict[str, set[str]] = {
-    "databases":    {"database"},
-    "checks":       {"num", "database", "name", "description", "enabled"},
-    "tags":         {"name"},
-    "checks_tags":  {"num", "database", "tag"},
-    "check_params": {"num", "database", "param", "value", "default_value"},
-    "plan_fields":  {"database", "raw", "key", "enabled"},
+    "databases":      {"database"},
+    "checks":         {"num", "database", "name", "description", "enabled"},
+    "tags":           {"name"},
+    "checks_tags":    {"num", "database", "tag"},
+    "check_params":   {"num", "database", "param", "value", "default_value"},
+    "plan_fields":    {"database", "raw", "key", "enabled"},
+    "config_audit":   {"id", "table_name", "column_name", "optype",
+                       "ts", "old_value", "new_value", "who"},
+    "_audit_session": {"id", "who"},
 }
 
 def _ensure_db(db_path: Path) -> None:
@@ -285,10 +373,7 @@ class CheckRegistry:
         return TARGET_DB_TYPE
 
     def load(self) -> tuple[CheckBase, ...]:
-        return load_checks(
-            TARGET_DB_TYPE,
-            self._db_path
-        )
+        return load_checks(TARGET_DB_TYPE, self._db_path)
 
     def load_fields(self) -> dict[str, str]:
         return load_plan_fields(TARGET_DB_TYPE, self._db_path)
@@ -296,36 +381,64 @@ class CheckRegistry:
     def load_field_policy(self) -> dict[str, int]:
         return load_field_policy(TARGET_DB_TYPE, self._db_path)
 
-    def load_field_config(self) -> dict[str, tuple[str, int]]:   # ← добавить
+    def load_field_config(self) -> dict[str, tuple[str, int]]:
         return load_field_config(TARGET_DB_TYPE, self._db_path)
+
+    def history(
+        self,
+        table_name: str = "",
+        column_name: str = "",
+        optype: str = "",
+        count: int = 0,
+        include_seed: bool = False
+    ) -> list[dict[str, Any]]:
+        return history(
+            table_name, column_name, optype, count, self._db_path
+        )
+
+    def set_audit_writer(self, who: str = "system") -> None:
+        set_audit_writer(who, self._db_path)
+
+    @contextmanager
+    def audit_writer(self, who: str):
+        with audit_writer(who, self._db_path):
+            yield
+
+_SEED_OBJECTS_DROP = (
+    "drop view  if exists checks_with_tags",
+    "drop table if exists check_params",
+    "drop table if exists checks_tags",
+    "drop table if exists checks",
+    "drop table if exists tags",
+    "drop table if exists plan_fields",
+    "drop table if exists databases",
+)
 
 def init_db(db_path: Path | str = DEFAULT_DB) -> None:
     """Create or rebuild the config database from schema.sql and seed.sql.
 
-    If the database file already exists, it is removed and rebuilt from
-    scratch — the seed file contains plain ``insert`` statements, so
-    re-running against an existing schema would violate constraints.
+    Seed tables are dropped and rebuilt. ``config_audit`` and
+    ``_audit_session`` are preserved across rebuilds — the audit log
+    outlives the seed configuration it records.
     """
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
-
-    # Remove the old file, if any. Safe on macOS/Linux even if a running
-    # process still has the file open — the old inode stays alive until
-    # that process closes it, and the next `load()` will pick up the new
-    # file by path.
-    if db_path.exists():
-        db_path.unlink()
 
     schema = (_CONFIG_DIR / "schema.sql").read_text()
     seed = (_CONFIG_DIR / "seed.sql").read_text()
 
     with sqlite3.connect(db_path) as conn:
+        for stmt in _SEED_OBJECTS_DROP:
+            conn.execute(stmt)
         conn.executescript(schema)
         conn.executescript(seed)
 
-        # Sanity check: schema and seed must produce a non-empty registry.
-        n_checks = conn.execute("select count(*) from checks").fetchone()[0]
-        n_fields = conn.execute("select count(*) from plan_fields").fetchone()[0]
+        n_checks = conn.execute(
+            "select count(*) from checks"
+        ).fetchone()[0]
+        n_fields = conn.execute(
+            "select count(*) from plan_fields"
+        ).fetchone()[0]
         if n_checks == 0 or n_fields == 0:
             raise RuntimeError(
                 f"Seed produced {n_checks} checks / {n_fields} plan fields "
@@ -469,6 +582,18 @@ def _show() -> None:
                 f"{r['raw']!r} → {r['key']!r}"
             )
 
+def set_audit_writer(self, who: str) -> None:
+    """Tag subsequent config writes with ``who`` in ``config_audit``.
+
+    Call this before any batch of writes that should be attributed
+    to a specific caller. Reset to ``'system'`` afterwards if needed.
+    """
+    with self._connect() as conn:
+        conn.execute(
+            "update _audit_session set who = ? where id = 1",
+            (who,),
+        )
+        conn.commit()
 
 if __name__ == "__main__":
     import sys

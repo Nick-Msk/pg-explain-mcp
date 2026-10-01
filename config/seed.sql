@@ -3,6 +3,11 @@
 
 -- Parents first — every other table references this.
 
+-- Seed writes are tagged 'seed' so the audit log can distinguish
+-- them from real config changes. Reset to 'system' at the end of
+-- this file.
+update _audit_session set who = 'seed' where id = 1;
+
 insert into databases (database) values
     ('postgres');
 
@@ -87,4 +92,7 @@ insert into plan_fields (database, raw, key, enabled) values
     ('postgres', 'Shared Read Blocks',      'shared_read_blocks',     1),
     ('postgres', 'Temp Read Blocks',        'temp_read_blocks',       1),
     ('postgres', 'Temp Written Blocks',     'temp_written_blocks',    1);
+
+update _audit_session set who = 'system' where id = 1;
+
 
