@@ -27,7 +27,9 @@ from pathlib import Path
 
 from pg_explain_mcp.analyzer import (
     new_format_plan_tree,
+    new_format_root,
     new_parse_plan,
+    new_parse_root,
     new_plan_to_list,
 )
 from pg_explain_mcp.config import DEFAULT_DB, CheckRegistry
@@ -62,15 +64,26 @@ def _resolve_sql(arg: str | None) -> str | None:
         return sys.stdin.read()
     return None
 
-
-def _emit(root, field_config, as_json: bool, marker_tabs: int = 5) -> None:
+def _emit(root, root_meta, field_config, as_json,
+          marker_tabs: int = 5, with_meta: bool = False) -> None:
     if as_json:
-        nodes = new_plan_to_list(root, field_config=field_config)
-        print(json.dumps(nodes, indent=2, ensure_ascii=False))
-    else:
-        print(new_format_plan_tree(
-            root, field_config=field_config, marker_tabs=marker_tabs,
-        ))
+        plan = new_plan_to_list(root, field_config=field_config)
+        if with_meta:
+            print(json.dumps(
+                {"meta": root_meta, "plan": plan},
+                indent=2, ensure_ascii=False,
+            ))
+        else:
+            print(json.dumps(plan, indent=2, ensure_ascii=False))
+        return
+
+    meta_text = new_format_root(root_meta)
+    if meta_text:
+        print(meta_text)
+        print()
+    print(new_format_plan_tree(
+        root, field_config=field_config, marker_tabs=marker_tabs,
+    ))
 
 
 def _field_config(all_fields: bool):
@@ -143,6 +156,15 @@ def main() -> int:
             "marker. Default: 5."
         ),
     )
+    parser.add_argument(
+        "--with-meta",
+        action="store_true",
+        help=(
+            "Wrap --json output as {\"meta\": ..., \"plan\": ...} "
+            "instead of a bare plan-node list. Text output always "
+            "prints meta above the tree."
+        ),
+    )
     args = parser.parse_args()
 
     if args.sql_or_file and args.plan:
@@ -169,8 +191,10 @@ def main() -> int:
             return 1
 
         root = new_parse_plan(plan_json)
-        _emit(root, _field_config(args.all_fields),
-              args.json, args.marker_tabs)
+        root_meta = new_parse_root(plan_json)
+
+        _emit(root, root_meta, _field_config(args.all_fields),
+            args.json, args.marker_tabs, with_meta=args.with_meta)
 
         return 0
 

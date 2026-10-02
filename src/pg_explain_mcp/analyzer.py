@@ -192,6 +192,63 @@ def new_parse_plan(plan_json: list[dict[str, Any]]) -> PlanNode | None:
 
     return build(plan_json[0].get("Plan", {}), None, 0, "", 0)
 
+def new_parse_root(plan_json: list[dict[str, Any]]) -> dict[str, Any]:
+    """Extract top-level EXPLAIN metadata.
+
+    ``plan_json[0]`` carries, alongside ``Plan``:
+
+    - ``Planning``      — planning-time buffer/IO counters
+    - ``Planning Time`` — planning wall time, ms
+    - ``Execution Time``— execution wall time, ms
+    - ``JIT``           — JIT stats (present only when JIT ran)
+    - ``Triggers``      — trigger firing info
+
+    Returns everything except ``Plan``. Empty dict for empty input.
+    """
+    if not plan_json:
+        return {}
+    root = plan_json[0]
+    return {k: v for k, v in root.items() if k != "Plan"}
+
+def _render_meta(value: Any, indent: int) -> list[str]:
+    pad = "  " * indent
+
+    if isinstance(value, dict):
+        if not value:
+            return [f"{pad}{{}}"]
+        lines: list[str] = []
+        for k, v in value.items():
+            if isinstance(v, dict) and v:
+                lines.append(f"{pad}{k}:")
+                lines.extend(_render_meta(v, indent + 1))
+            elif isinstance(v, list) and v:
+                lines.append(f"{pad}{k}:")
+                lines.extend(_render_meta(v, indent + 1))
+            else:
+                # scalar, or empty dict / empty list — inline
+                lines.append(f"{pad}{k}: {v}")
+        return lines
+
+    if isinstance(value, list):
+        if not value:
+            return [f"{pad}[]"]
+        lines = []
+        for i, item in enumerate(value):
+            if isinstance(item, (dict, list)) and item:
+                lines.append(f"{pad}[{i}]:")
+                lines.extend(_render_meta(item, indent + 1))
+            else:
+                lines.append(f"{pad}[{i}]: {item}")
+        return lines
+
+    return [f"{pad}{value}"]
+
+def new_format_root(meta: dict[str, Any]) -> str:
+    """Render top-level EXPLAIN metadata as indented text."""
+    if not meta:
+        return ""
+    return "\n".join(_render_meta(meta, 0))
+
 def _auto_key(raw: str) -> str:
     """Fallback snake_case key for fields not listed in plan_fields."""
     return raw.lower().replace(" ", "_").replace("/", "_")

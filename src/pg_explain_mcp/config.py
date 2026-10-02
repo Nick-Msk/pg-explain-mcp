@@ -3,6 +3,7 @@
 import os
 import sqlite3
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -19,8 +20,6 @@ from pg_explain_mcp.analyzer import (
     PartitionPruningCheck,
     SeqScanCheck,
 )
-
-from contextlib import contextmanager
 
 _CONFIG_DIR = Path(__file__).resolve().parent.parent.parent / "config"
 DEFAULT_DB = _CONFIG_DIR / "checks.db"
@@ -581,19 +580,6 @@ def _show() -> None:
                 f"  {r['database']}  [{mode:4}]  "
                 f"{r['raw']!r} → {r['key']!r}"
             )
-
-def set_audit_writer(self, who: str) -> None:
-    """Tag subsequent config writes with ``who`` in ``config_audit``.
-
-    Call this before any batch of writes that should be attributed
-    to a specific caller. Reset to ``'system'`` afterwards if needed.
-    """
-    with self._connect() as conn:
-        conn.execute(
-            "update _audit_session set who = ? where id = 1",
-            (who,),
-        )
-        conn.commit()
 
 if __name__ == "__main__":
     import sys

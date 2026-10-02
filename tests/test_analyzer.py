@@ -17,7 +17,9 @@ from pg_explain_mcp.analyzer import (
     SeqScanCheck,
     new_analyze_plan,
     new_format_plan_tree,
+    new_format_root,
     new_parse_plan,
+    new_parse_root,
     new_plan_to_list,
     summarize_plan_node,
 )
@@ -1227,6 +1229,46 @@ class TestParsePlan:
             "0:0/1:1",
             "0:0/1:1/2:0",
         ]
+
+class TestParseRoot:
+    def test_empty(self):
+        assert new_parse_root([]) == {}
+
+    def test_extracts_meta(self):
+        plan = [{
+            "Plan": {"Node Type": "Seq Scan"},
+            "Execution Time": 12.5,
+            "Planning Time": 0.1,
+            "JIT": {"Functions": 3, "Timing": {"Total": 1.5}},
+        }]
+        meta = new_parse_root(plan)
+        assert "Plan" not in meta
+        assert meta["Execution Time"] == 12.5
+        assert meta["JIT"]["Functions"] == 3
+
+    def test_missing_meta_is_empty(self):
+        plan = [{"Plan": {"Node Type": "Seq Scan"}}]
+        assert new_parse_root(plan) == {}
+
+    def test_format_nested(self):
+        meta = {
+            "Execution Time": 12.5,
+            "JIT": {
+                "Functions": 3,
+                "Options": {"Inlining": True},
+            },
+        }
+        text = new_format_root(meta)
+        assert "Execution Time: 12.5" in text
+        assert "JIT:" in text
+        assert "  Functions: 3" in text
+        assert "    Inlining: True" in text
+
+    def test_format_empty(self):
+        assert new_format_root({}) == ""
+
+    def test_format_empty_list(self):
+        assert "Triggers: []" in new_format_root({"Triggers": []})
 
 class TestFormatPlanTree:
     @staticmethod
