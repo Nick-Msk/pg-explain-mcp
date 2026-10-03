@@ -259,3 +259,54 @@ PostgreSQL MCP server, verification back in `pg-explain-mcp`.
 |---|---|
 | [Full tuning workflow](combined_tuning/sample_full_tuning_workflow.md) | Bad stats + missing index → two fixes, 229 ms → 67 ms |
 
+
+## JitDecisionCheck: JIT overhead — healthy vs. dominant
+
+Reproducible two-part scenario backed by
+`mcp_explain_tool.data_jit_decision_heavy` (5M rows, CPU-bound
+aggregate) and `mcp_explain_tool.data_jit_decision_cheap` (100 rows).
+
+Prerequisites:
+
+```sql
+call mcp_explain_tool.fill_jit_decision(5000000);
+```
+
+| Example | What it demonstrates |
+|---|---|
+| [Heavy aggregate — JIT pays off](pg_jit_decision/sample_jit_decision_on_heavy.md) | 5M rows, 11 math functions, JIT overhead ≈ 1.7 %, no warnings |
+| [Cheap query — JIT dominates](pg_jit_decision/sample_jit_decision_on_cheap.md) | 100 rows with `jit_above_cost = 1`, JIT overhead ≈ 104 %, `jit_decision` fires |
+
+The second example requires a session-level GUC override:
+
+```sql
+SET jit_above_cost = 1;
+-- run the query, then:
+RESET jit_above_cost;
+```
+
+The check compares JIT cost against the **root node's
+`actual_total_time`**, not against the top-level `Execution Time`.
+The latter includes executor startup, JIT context initialization,
+and result marshalling — noise that on a sub-millisecond plan dwarfs
+the query itself.
+
+---
+
+## Adding a new example
+
+Each check gets its own directory `pg_<check_name>/` with one or more
+`sample_<check>_<scenario>.md` files. A sample file should contain:
+
+1. A short `## Setup` with the exact `fill_*` call.
+2. The query, verbatim.
+3. The raw tool output (JSON from `explain`, or the text tree from
+   `explain_tree_text`).
+4. A short analysis: what the plan does, why the check fires (or
+   does not), what the recommended action is.
+5. A `## Test environment` section at the bottom — PostgreSQL
+   version, LLM, and any session-level GUCs that were set.
+
+The LLM used during capture should be recorded, so readers can
+reproduce the analysis, not just the plan.
+

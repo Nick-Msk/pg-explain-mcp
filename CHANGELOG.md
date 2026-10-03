@@ -7,7 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-(no changes yet)
+### Added
+
+- **`JitDecisionCheck`.** Reads the top-level `JIT` block from
+  EXPLAIN JSON and warns when JIT compilation time exceeds a
+  configurable fraction of the root node's execution time. Two
+  parameters: `min_jit_ms` (ignore negligible JIT) and
+  `overhead_ratio` (fraction of `actual_total_time` above which
+  the check fires). Unlike other checks, it runs once per query,
+  not once per node — implemented by reading `node.root_meta`,
+  which `new_parse_plan` attaches to every `PlanNode`.
+
+- **`PlanNode.root_meta`.** Every node now carries a reference to
+  the top-level EXPLAIN metadata (`Planning`, `Planning Time`,
+  `JIT`, `Triggers`, `Execution Time`). The dict is shared, not
+  copied per node.
+
+- **`new_parse_root` / `new_format_root`.** Extract and render
+  top-level EXPLAIN metadata separately from the plan tree.
+  `pg-explain-parse` prints it above the tree; `--with-meta` wraps
+  JSON output as `{"meta": ..., "plan": ...}`.
+
+- **`root_meta` in `explain` output.** The MCP tool now includes
+  top-level metadata alongside `plan_nodes` and `issues`, so an
+  LLM can see `JIT.Timing.Total` without a second EXPLAIN call.
+
+- **`mcp_explain_tool`: `data_jit_decision_heavy` /
+  `data_jit_decision_cheap`.** Fixture tables plus
+  `fill_jit_decision` / `clear_jit_decision` procedures. Wired
+  into `fill_all` / `clear_all`.
+
+- **Usage examples for `jit_decision`.**
+  `usage_examples/pg_jit_decision/` — a healthy 5M-row aggregate
+  (JIT overhead 1.7 %, check silent) and a cheap 100-row query
+  with `jit_above_cost = 1` (JIT overhead 104 %, check fires).
+
+### Changed
+
+- **`JitDecisionCheck` denominator.** The check compares JIT cost
+  against the root node's `actual_total_time`, not the top-level
+  `Execution Time`. On sub-millisecond plans the top-level number
+  includes ~130 ms of executor startup and shutdown, which drowns
+  out the JIT signal.
+
+### Fixed
+
+- **`test_analyzer`: `TestAnalyzePlan` no longer connects to
+  PostgreSQL.** An autouse `_no_db` fixture patches
+  `analyzer.get_indexes` so that `NonSargableCheck`, invoked via
+  `ALL_CHECKS`, does not open a live connection during unit tests.
+  Tests that need specific indexes override the fixture with their
+  own `monkeypatch.setattr`.
+
+### Notes
+
+- The `jit_decision` fires case requires `jit_above_cost` to be
+  lowered for the session. In production this usually indicates a
+  misconfigured role-level or database-level GUC, not a query
+  problem. See `sample_jit_decision_on_cheap.md` for the
+  recommended checks.
 
 ## [0.5.1] — 2026-10-01
 

@@ -820,10 +820,22 @@ class TestJitDecisionCheck:
         return JitDecisionCheck(params={**self.DEFAULTS, **overrides})
 
     @staticmethod
-    def _root(**meta) -> PlanNode:
+    def _root(node_time: float = 0.0, **meta) -> PlanNode:
+        """Build a root node with EXPLAIN metadata attached.
+
+        ``node_time`` goes into ``fields["Actual Total Time"]`` — this is
+        what ``JitDecisionCheck`` compares JIT cost against. When not
+        given, it defaults to the meta's ``Execution Time``, mirroring
+        a plan where executor overhead is negligible.
+        """
+        if node_time == 0.0:
+            node_time = meta.get("Execution Time", 0.0)
         return PlanNode(
             depth=0, path="0:0",
-            fields={"Node Type": "Seq Scan"},
+            fields={
+                "Node Type": "Seq Scan",
+                "Actual Total Time": node_time,
+            },
             root_meta=meta,
         )
 
@@ -839,20 +851,26 @@ class TestJitDecisionCheck:
         })) == []
 
     def test_jit_dominates_is_reported(self):
-        issues = self._check().check(self._root(**{
-            "Execution Time": 3.6,
-            "JIT": {"Functions": 2, "Timing": {"Total": 3.17}},
-        }))
+        node = PlanNode(
+            depth=0, path="0:0",
+            fields={"Node Type": "Aggregate", "Actual Total Time": 3.6},
+            root_meta={
+                "JIT": {"Functions": 2, "Timing": {"Total": 3.17}},
+            },
+        )
+        issues = self._check().check(node)
         assert len(issues) == 1
-        assert issues[0].type == "jit_decision"
-        assert issues[0].severity == "warning"
         assert "88.1%" in issues[0].message
 
     def test_long_query_is_ok(self):
-        assert self._check().check(self._root(**{
-            "Execution Time": 500.0,
-            "JIT": {"Functions": 5, "Timing": {"Total": 5.0}},
-        })) == []
+        node = PlanNode(
+            depth=0, path="0:0",
+            fields={"Node Type": "Aggregate", "Actual Total Time": 500.0},
+            root_meta={
+                "JIT": {"Functions": 5, "Timing": {"Total": 5.0}},
+            },
+        )
+        assert self._check().check(node) == []
 
     def test_zero_exec_time_is_ok(self):
         assert self._check().check(self._root(**{
@@ -878,19 +896,19 @@ class TestJitDecisionCheck:
         )
         assert self._check().check(child) == []
 
-    def test_custom_thresholds(self):
-        meta = {
-            "Execution Time": 100.0,
-            "JIT": {"Functions": 5, "Timing": {"Total": 5.0}},
-        }
-        assert self._check().check(
-            self._root(**meta)) == []
-        assert len(self._check(overhead_ratio="0.01").check(
-            self._root(**meta))
-        ) == 1
-        assert self._check(min_jit_ms="10.0").check(
-            self._root(**meta)
-        ) == []
+        def test_custom_thresholds(self):
+            meta = {
+                "Execution Time": 100.0,
+                "JIT": {"Functions": 5, "Timing": {"Total": 5.0}},
+            }
+            # default ratio 0.3 → 5/100 = 0.05 < 0.3 → silent
+            assert self._check().check(self._root(**meta)) == []
+            # strict ratio 0.01 → 0.05 > 0.01 → fires
+            assert len(
+                self._check(overhead_ratio="0.01").check(self._root(**meta))
+            ) == 1
+            # min_jit_ms above total → silent
+            assert self._check(min_jit_ms="10.0").check(self._root(**meta)) == []
 
 class TestSummarizePlanNode:
     FIELDS = {

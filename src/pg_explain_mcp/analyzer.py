@@ -1238,15 +1238,21 @@ class JitDecisionCheck(ParsedPlanCheckBase):
             return None
 
         total_jit = jit.get("Timing", {}).get("Total", 0.0)
-        exec_time = node.root_meta.get("Execution Time", 0.0)
-        if exec_time <= 0:
+
+        # Compare against the root node's own execution time, not the
+        # top-level "Execution Time". The latter includes executor
+        # startup/shutdown, JIT context init, and result transfer — on
+        # cheap queries that overhead dwarfs the query itself and
+        # drowns out the JIT signal.
+        node_time = node.get("Actual Total Time", 0.0)
+        if node_time <= 0:
             return None
 
         return {
             "functions": jit.get("Functions", 0),
             "total_jit": total_jit,
-            "exec_time": exec_time,
-            "ratio": total_jit / exec_time,
+            "node_time": node_time,
+            "ratio": total_jit / node_time,
         }
 
     def validate_rule(self, info: dict[str, Any]) -> bool:
@@ -1262,17 +1268,18 @@ class JitDecisionCheck(ParsedPlanCheckBase):
                 type=self.type,
                 message=(
                     f"JIT compiled {info['functions']} function(s) in "
-                    f"{info['total_jit']:.2f} ms on a query that ran in "
-                    f"{info['exec_time']:.2f} ms — {pct:.1f}% of total "
-                    "time was JIT overhead. JIT pays off on long-running "
-                    "analytical queries, not on cheap OLTP queries. "
-                    "Check jit_above_cost (SHOW jit_above_cost); "
+                    f"{info['total_jit']:.2f} ms on a plan that ran in "
+                    f"{info['node_time']:.2f} ms — {pct:.1f}% of the plan's "
+                    "execution time was JIT overhead. JIT pays off on "
+                    "long-running analytical queries, not on cheap OLTP "
+                    "queries. Check jit_above_cost (SHOW jit_above_cost); "
                     "the default is 100000. Raise it, or disable JIT "
                     "for this workload with SET jit = off."
                 ),
                 node="JIT",
             )
         ]
+
 
 # ---------------------------------------------------------------------------
 # Traversal and reporting
