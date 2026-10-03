@@ -58,10 +58,12 @@ produced by an independent, pluggable check — a subclass of
 | `IndexOnlyScanCheck`      | Index Only Scan with a stale visibility map             |
 | `BitmapHeapScanCheck`     | Large Bitmap Heap Scan                                  |
 | `DiskSpillSortCheck`      | Sort spilling to disk (`external merge`)                |
+| `DiskSpillHashCheck`      | Hash operation using multiple batches                   |
 | `NestedLoopCheck`         | Nested Loop with a high number of inner iterations      |
 | `EstimateMismatchCheck`   | Planner cardinality misestimate                         |
 | `PartitionPruningCheck`   | `Append` over many partitions — pruning may have failed |
 | `NonSargableCheck`        | Predicate wraps an indexed column in a function         |
+| `JitDecisionCheck`        | JIT compilation overhead exceeds the plan's useful work |
 
 To add a new check, subclass `ParsedPlanCheckBase` in
 `src/pg_explain_mcp/analyzer.py`, implement the three phases
@@ -82,6 +84,12 @@ Only the fields that matter for reasoning are kept:
 - `sort_method`, `sort_space_type`, `sort_space_used`
 - `hash_batches`, `peak_memory_usage`
 - `parallel_aware`
+
+The report also carries `root_meta` — top-level EXPLAIN metadata
+(`Planning`, `Planning Time`, `JIT`, `Triggers`, `Execution Time`) —
+so an LLM can read `JIT.Timing.Total` without a second EXPLAIN callThe report also carries `root_meta` — top-level EXPLAIN metadata
+(`Planning`, `Planning Time`, `JIT`, `Triggers`, `Execution Time`) —
+so an LLM can read `JIT.Timing.Total` without a second EXPLAIN call..
 
 The list of fields is configurable — see [Configuration](#configuration).
 
@@ -141,6 +149,7 @@ pg-explain-parse --no-analyze        # plan only, don't execute
 pg-explain-parse --no-buffers        # skip BUFFERS
 pg-explain-parse --all-fields        # keep zero-valued numeric fields
 pg-explain-parse --marker-tabs 3     # tab padding in the text tree
+pg-explain-parse --with-meta         # wrap JSON as {meta, plan}
 
 python -m pg_explain_mcp.config --init   # rebuild from schema + seed
 python -m pg_explain_mcp.config --show   # print current state
@@ -411,6 +420,7 @@ check, with the raw tool output and analysis:
 | `EstimateMismatchCheck`| norm, norm+index, skewed, skewed-other-value                          |
 | `PartitionPruningCheck`| range predicate vs. non-sargable predicate on partitioned table       |
 | `NonSargableCheck`     | sargable vs. non-sargable predicate on indexed column                 |
+| JitDecisionCheck | 5M-row aggregate (JIT pays off) vs. 100-row query (JIT dominates) |
 
 See [`usage_examples/`](usage_examples/) for the full index, the test
 environment, and prompting tips.
@@ -448,8 +458,6 @@ pg-explain-mcp/
   than once within a single plan (via CTEs, subqueries, or lateral
   joins, not self-joins). Often signals that CTE materialisation or
   a temp table would reduce I/O.
-- **`jit_decision`** — flag expensive JIT compilation on short
-  queries.
 
 ### Database health checker
 
