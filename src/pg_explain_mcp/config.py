@@ -15,6 +15,7 @@ from pg_explain_mcp.analyzer import (
     EstimateMismatchCheck,
     IndexOnlyScanCheck,
     IndexRegularScanCheck,
+    JitDecisionCheck,
     NestedLoopCheck,
     NonSargableCheck,
     PartitionPruningCheck,
@@ -118,6 +119,7 @@ def history(
 _REGISTRY: dict[str, type[CheckBase]] = {
     "SeqScanCheck":          SeqScanCheck,
     "EstimateMismatchCheck": EstimateMismatchCheck,
+    "JitDecisionCheck":      JitDecisionCheck,
     "DiskSpillSortCheck":    DiskSpillSortCheck,
     "DiskSpillHashCheck":    DiskSpillHashCheck,
     "NestedLoopCheck":       NestedLoopCheck,

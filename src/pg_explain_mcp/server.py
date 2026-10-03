@@ -9,6 +9,7 @@ from pg_explain_mcp.analyzer import (
     new_analyze_plan,
     new_format_plan_tree,
     new_parse_plan,
+    new_parse_root,
     new_plan_to_list,
 )
 from pg_explain_mcp.config import (
@@ -358,12 +359,12 @@ def explain(sql: str) -> str:
         plan_json = raw["QUERY PLAN"]
 
         checks = _registry.load()
-        #report = analyze_plan(plan_json, checks=checks)
         report = new_analyze_plan(plan_json, checks=checks)
 
         config = _registry.load_field_config()
         tree = new_parse_plan(plan_json)
         report["plan_nodes"] = new_plan_to_list(tree, field_config=config)
+        report["root_meta"] = new_parse_root(plan_json)
 
         return json.dumps(report, indent=2, ensure_ascii=False)
     except ValueError as e:

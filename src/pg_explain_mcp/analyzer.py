@@ -54,6 +54,7 @@ class PlanNode:
     parent: "PlanNode | None" = None
     children: list["PlanNode"] = field(default_factory=list)
     fields: dict[str, Any] = field(default_factory=dict)
+    root_meta: dict[str, Any] = field(default_factory=dict)
 
     # --- field access (behave like the old dict) --------------------
 
@@ -175,6 +176,9 @@ def new_parse_plan(plan_json: list[dict[str, Any]]) -> PlanNode | None:
     if not plan_json:
         return None
 
+    root_raw = plan_json[0]
+    root_meta = {k: v for k, v in root_raw.items() if k != "Plan"}
+
     def build(
         raw: dict[str, Any],
         parent: PlanNode | None,
@@ -185,12 +189,18 @@ def new_parse_plan(plan_json: list[dict[str, Any]]) -> PlanNode | None:
         segment = f"{depth}:{sibling_index}"
         path = f"{parent_path}/{segment}" if parent_path else segment
         fields = {k: v for k, v in raw.items() if k != "Plans"}
-        node = PlanNode(depth=depth, path=path, parent=parent, fields=fields)
+        node = PlanNode(
+            depth=depth,
+            path=path,
+            parent=parent,
+            fields=fields,
+            root_meta=root_meta
+        )
         for i, child_raw in enumerate(raw.get("Plans", [])):
             node.children.append(build(child_raw, node, depth + 1, path, i))
         return node
 
-    return build(plan_json[0].get("Plan", {}), None, 0, "", 0)
+    return build(root_raw.get("Plan", {}), None, 0, "", 0)
 
 def new_parse_root(plan_json: list[dict[str, Any]]) -> dict[str, Any]:
     """Extract top-level EXPLAIN metadata.
@@ -1187,6 +1197,82 @@ class NonSargableCheck(ParsedPlanCheckBase):
                 return func
 
         return None
+
+class JitDecisionCheck(ParsedPlanCheckBase):
+    """JIT compilation dominated the query's runtime.
+
+    Reads the top-level ``JIT`` block from EXPLAIN JSON, available
+    on every node via ``node.root_meta``. Fires once per query — on
+    the root node only — when JIT overhead exceeds
+    ``overhead_ratio`` of ``Execution Time`` and the absolute JIT
+    cost is above ``min_jit_ms``.
+
+    A query like ``SELECT count(*) FROM flights`` (0.4 ms of real
+    work) with JIT overhead of 3.2 ms is the canonical case — JIT
+    costs more than it saves.
+
+    ``gather_info`` returns::
+
+        {
+            "functions": int,
+            "total_jit": float,   # ms
+            "exec_time": float,   # ms
+            "ratio":     float,   # total_jit / exec_time
+        }
+    """
+
+    name = "JitDecisionCheck"
+    type = "jit_decision"
+    PARAMS = {
+        "min_jit_ms":     float,
+        "overhead_ratio": float,
+    }
+
+    def gather_info(self, node: PlanNode) -> dict[str, Any] | None:
+        # Root-meta checks run once per query. Skip descendants.
+        if node.parent is not None:
+            return None
+
+        jit = node.root_meta.get("JIT")
+        if not jit:
+            return None
+
+        total_jit = jit.get("Timing", {}).get("Total", 0.0)
+        exec_time = node.root_meta.get("Execution Time", 0.0)
+        if exec_time <= 0:
+            return None
+
+        return {
+            "functions": jit.get("Functions", 0),
+            "total_jit": total_jit,
+            "exec_time": exec_time,
+            "ratio": total_jit / exec_time,
+        }
+
+    def validate_rule(self, info: dict[str, Any]) -> bool:
+        if info["total_jit"] < self.params["min_jit_ms"]:
+            return False
+        return info["ratio"] >= self.params["overhead_ratio"]
+
+    def generate_msg(self, info: dict[str, Any]) -> list[Issue]:
+        pct = info["ratio"] * 100
+        return [
+            Issue(
+                severity=SEVERITY_WARNING,
+                type=self.type,
+                message=(
+                    f"JIT compiled {info['functions']} function(s) in "
+                    f"{info['total_jit']:.2f} ms on a query that ran in "
+                    f"{info['exec_time']:.2f} ms — {pct:.1f}% of total "
+                    "time was JIT overhead. JIT pays off on long-running "
+                    "analytical queries, not on cheap OLTP queries. "
+                    "Check jit_above_cost (SHOW jit_above_cost); "
+                    "the default is 100000. Raise it, or disable JIT "
+                    "for this workload with SET jit = off."
+                ),
+                node="JIT",
+            )
+        ]
 
 # ---------------------------------------------------------------------------
 # Traversal and reporting

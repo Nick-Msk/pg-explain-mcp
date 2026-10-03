@@ -10,6 +10,7 @@ from pg_explain_mcp.analyzer import (
     EstimateMismatchCheck,
     IndexOnlyScanCheck,
     IndexRegularScanCheck,
+    JitDecisionCheck,
     NestedLoopCheck,
     NonSargableCheck,
     PartitionPruningCheck,
@@ -812,6 +813,85 @@ class TestNonSargableCheck:
         assert "lower" in issues[0].message
         assert "email" in issues[0].message
 
+class TestJitDecisionCheck:
+    DEFAULTS = {"min_jit_ms": "1.0", "overhead_ratio": "0.3"}
+
+    def _check(self, **overrides) -> JitDecisionCheck:
+        return JitDecisionCheck(params={**self.DEFAULTS, **overrides})
+
+    @staticmethod
+    def _root(**meta) -> PlanNode:
+        return PlanNode(
+            depth=0, path="0:0",
+            fields={"Node Type": "Seq Scan"},
+            root_meta=meta,
+        )
+
+    def test_no_jit_section_is_ok(self):
+        assert self._check().check(self._root(**{
+            "Execution Time": 100.0,
+        })) == []
+
+    def test_negligible_jit_is_ok(self):
+        assert self._check().check(self._root(**{
+            "Execution Time": 100.0,
+            "JIT": {"Functions": 5, "Timing": {"Total": 0.5}},
+        })) == []
+
+    def test_jit_dominates_is_reported(self):
+        issues = self._check().check(self._root(**{
+            "Execution Time": 3.6,
+            "JIT": {"Functions": 2, "Timing": {"Total": 3.17}},
+        }))
+        assert len(issues) == 1
+        assert issues[0].type == "jit_decision"
+        assert issues[0].severity == "warning"
+        assert "88.1%" in issues[0].message
+
+    def test_long_query_is_ok(self):
+        assert self._check().check(self._root(**{
+            "Execution Time": 500.0,
+            "JIT": {"Functions": 5, "Timing": {"Total": 5.0}},
+        })) == []
+
+    def test_zero_exec_time_is_ok(self):
+        assert self._check().check(self._root(**{
+            "Execution Time": 0.0,
+            "JIT": {"Functions": 5, "Timing": {"Total": 3.0}},
+        })) == []
+
+    def test_missing_timing_is_ok(self):
+        assert self._check().check(self._root(**{
+            "Execution Time": 100.0,
+            "JIT": {"Functions": 5},
+        })) == []
+
+    def test_non_root_node_is_skipped(self):
+        parent = self._root(**{
+            "Execution Time": 3.6,
+            "JIT": {"Functions": 2, "Timing": {"Total": 3.17}},
+        })
+        child = PlanNode(
+            depth=1, path="0:0/1:0", parent=parent,
+            fields={"Node Type": "Seq Scan"},
+            root_meta=parent.root_meta,
+        )
+        assert self._check().check(child) == []
+
+    def test_custom_thresholds(self):
+        meta = {
+            "Execution Time": 100.0,
+            "JIT": {"Functions": 5, "Timing": {"Total": 5.0}},
+        }
+        assert self._check().check(
+            self._root(**meta)) == []
+        assert len(self._check(overhead_ratio="0.01").check(
+            self._root(**meta))
+        ) == 1
+        assert self._check(min_jit_ms="10.0").check(
+            self._root(**meta)
+        ) == []
+
 class TestSummarizePlanNode:
     FIELDS = {
         "Relation Name":  "relation",
@@ -1032,6 +1112,21 @@ class TestAnalyzePlan:
         })
         result = new_analyze_plan(plan, checks=(check,))
         assert result["checks_applied"] == ["SeqScanCheck"]
+
+        def test_plan_with_jit_overhead(self):
+            plan = [{
+                "Plan": {"Node Type": "Seq Scan", "Actual Rows": 0},
+                "Execution Time": 3.6,
+                "Planning Time": 1.0,
+                "JIT": {"Functions": 2, "Timing": {"Total": 3.17}},
+            }]
+            result = new_analyze_plan(plan, checks=ALL_CHECKS)
+            types = [i["type"] for i in result["issues"]]
+            assert "jit_decision" in types
+            jit = next(i for i in result["issues"]
+                       if i["type"] == "jit_decision")
+            assert jit["depth"] == 0
+            assert jit["parent_node"] == ""
 
 # ---------------------------------------------------------------------------
 # list_indexes formatting

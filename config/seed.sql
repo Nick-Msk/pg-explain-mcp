@@ -31,7 +31,8 @@ insert into checks (num, database, name, description, enabled) values
     (7,  'postgres', 'IndexRegularScanCheck', 'index scan reading too many blocks for rows returned',   1),
     (8,  'postgres', 'IndexOnlyScanCheck',    'index only scan with stale visibility map',              1),
     (9,  'postgres', 'PartitionPruningCheck', 'Append over many partitions — pruning may have failed',  1),
-    (10, 'postgres', 'NonSargableCheck',      'non-sargable predicate on an indexed column',            1);
+    (10, 'postgres', 'NonSargableCheck',      'non-sargable predicate on an indexed column',            1),
+    (11, 'postgres', 'JitDecisionCheck',      'JIT overhead exceeded useful work',                      1);
 
 insert into checks_tags (num, database, tag) values
     -- Scans
@@ -56,7 +57,8 @@ insert into checks_tags (num, database, tag) values
     (2,  'postgres', 'ESTIMATE'),    -- EstimateMismatchCheck
 
     -- Partitioning
-    (9,  'postgres', 'PARTITION');   -- PartitionPruningCheck
+    (9,  'postgres', 'PARTITION'),   -- PartitionPruningCheck
+    (11, 'postgres', 'GENERAL');     -- JitDecisionCheck
 
 insert into check_params (num, database, param, value, default_value) values
     (1, 'postgres', 'threshold_rows',    '1000',   '1000'),
@@ -78,7 +80,11 @@ insert into check_params (num, database, param, value, default_value) values
     (8, 'postgres', 'min_rows',          '100',    '100'),
     (8, 'postgres', 'heap_fetch_ratio',  '0.10',   '0.10'),
     (9, 'postgres', 'max_children',      '3',      '3'),
-    (10,'postgres', 'threshold_rows',    '1000',   '1000');
+    --
+    (10,'postgres', 'threshold_rows',    '1000',   '1000'),
+    -- JIT check params
+    (11, 'postgres', 'min_jit_ms',       '1.0', '1.0'),
+    (11, 'postgres', 'overhead_ratio',   '0.3', '0.3');
 
 insert into plan_fields (database, raw, key, enabled) values
     -- Noise — hide entirely (false = no signal)
