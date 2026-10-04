@@ -1,7 +1,0 @@
-[project]
-dependencies = [
-    "pg-explain-mcp>=0.5.2",   # переиспользуем analyzer, Issue, чеки
-    "mcp>=1.0.0,<2.0.0",
-    "psycopg[binary]>=3.0",
-]
-

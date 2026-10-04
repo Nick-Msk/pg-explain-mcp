@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pg-tune"
+version = "0.1.0a1"
+description = "Write-capable tuning companion to pg-explain-mcp"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "mcp>=1.0.0,<2.0.0",
+    "psycopg[binary]>=3.0"
+    # pg-explain-mcp is intentionally not listed here yet: it is
+    # not published on PyPI. Install it separately as an editable
+    # dependency from the repository root:
+    #     pip install -e ..
+    # When pg-explain-mcp is published, add the pin back.
+]
+
+[project.scripts]
+pg-tune-mcp = "pg_tune.server:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
