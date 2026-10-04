@@ -1,1 +1,13 @@
- 
+name: PostgreSQL Tune MCP
+version: 0.1.0
+schema: v1
+mcpServers:
+  - name: pg-tune
+    command: <path>/pg-explain-mcp/.venv/bin/pg-tune-mcp
+    env:
+      PGHOST: localhost
+      PGUSER: <pg_username>
+      PGDATABASE: <dbname>
+      PG_TUNE_ALLOW_WRITES: "yes"
+      PG_TUNE_BACKUP_DIR: <path>/pg-explain-mcp/pg-tune/config/backups
+

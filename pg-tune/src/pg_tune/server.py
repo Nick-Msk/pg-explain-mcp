@@ -153,6 +153,52 @@ def restore(backup_id: int, confirm: bool = False) -> str:
     except Exception as e:
         return f"Unexpected error: {e}"
 
+@mcp.tool()
+def list_backups(database: str = "", limit: int = 20) -> str:
+    """List registered pg-tune backups, most recent first.
+
+    Reads from the tune SQLite config (tune_backups). Does not
+    touch the target PostgreSQL database.
+
+    Args:
+        database: Filter by database name. Empty string returns
+            backups for all databases.
+        limit:    Return at most this many rows. Default 20.
+    """
+    from pg_tune.config import DEFAULT_DB, _connect, _ensure_db
+
+    _ensure_db(DEFAULT_DB)
+
+    sql = (
+        "select id, ts, database, size_bytes, pg_version, "
+        "       restored_ts, path "
+        "from tune_backups"
+    )
+    params: list = []
+    if database:
+        sql += " where database = ?"
+        params.append(database)
+    sql += " order by ts desc limit ?"
+    params.append(limit)
+
+    with _connect(DEFAULT_DB) as conn:
+        rows = conn.execute(sql, params).fetchall()
+
+    if not rows:
+        return f"No backups for {database!r}." if database else "No backups."
+
+    lines = [
+        f"{'id':>4}  {'ts':<24}  {'database':<20}  "
+        f"{'size':>10}  {'pg':<8}  state"
+    ]
+    for r in rows:
+        state = "restored" if r["restored_ts"] else "available"
+        pg = (r["pg_version"] or "").splitlines()[0].strip() or "?"
+        lines.append(
+            f"{r['id']:>4}  {r['ts']:<24}  {r['database']:<20}  "
+            f"{_human_bytes(r['size_bytes']):>10}  {pg:<8}  {state}"
+        )
+    return "\n".join(lines)
 
 def main() -> None:
     _check_startup_safety()
