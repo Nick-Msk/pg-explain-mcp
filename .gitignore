@@ -13,4 +13,8 @@ build/
 .*.un~
 *~
 config/checks.db
+pg-tune/config/tune.db
+pg-tune/config/backups/
+pg-tune/config/__pycache__/
+pg-tune/src/**/__pycache__/
 
