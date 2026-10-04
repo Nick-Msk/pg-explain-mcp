@@ -1,0 +1,207 @@
+"""Console scripts for pg-tune: backup, restore."""
+
+import argparse
+import json
+import os
+import sys
+
+from pg_tune.backup import BackupError, make_backup
+from pg_tune.restore import RestoreError, do_restore, inspect_restore
+
+
+def _human_bytes(n: int | None) -> str:
+    if not n:
+        return "0 B"
+    value = float(n)
+    for unit in ("B", "kB", "MB", "GB", "TB"):
+        if value < 1024:
+            return f"{value:.1f} {unit}"
+        value /= 1024
+    return f"{value:.1f} PB"
+
+
+def backup_main(argv: list[str] | None = None) -> int:
+    p = argparse.ArgumentParser(
+        prog="pg-tune-backup",
+        description=(
+            "Snapshot a database with pg_dump and register the "
+            "result in tune_backups."
+        ),
+    )
+    p.add_argument(
+        "-d", "--database",
+        default=None,
+        help="Database name. Defaults to PGDATABASE.",
+    )
+    p.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the backup reference as JSON.",
+    )
+    args = p.parse_args(argv)
+
+    try:
+        ref = make_backup(args.database)
+    except BackupError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        print(json.dumps(ref, indent=2))
+    else:
+        print(f"backup #{ref['id']} -> {ref['path']}")
+        print(f"  database: {ref['database']}")
+        print(f"  size:     {_human_bytes(ref['size_bytes'])}")
+        print(f"  sha256:   {ref['sha256']}")
+        print(f"  pg:       {ref['pg_version']}")
+    return 0
+
+def _resolve_backup_ref(ref: str, database: str | None) -> int:
+    """Accept a numeric id or '@latest'.
+
+    '@latest' resolves to the most recent backup — filtered by
+    ``database`` if given, otherwise across all databases.
+    """
+    if ref.isdigit():
+        return int(ref)
+    if ref != "@latest":
+        raise SystemExit(f"error: invalid backup reference {ref!r}")
+
+    from pg_tune.config import DEFAULT_DB, _connect, _ensure_db
+    _ensure_db(DEFAULT_DB)
+
+    with _connect(DEFAULT_DB) as conn:
+        if database:
+            row = conn.execute(
+                "select id from tune_backups where database = ? "
+                "order by ts desc limit 1",
+                (database,),
+            ).fetchone()
+            if row is None:
+                raise SystemExit(
+                    f"error: no backups for database {database!r}"
+                )
+        else:
+            row = conn.execute(
+                "select id from tune_backups order by ts desc limit 1"
+            ).fetchone()
+            if row is None:
+                raise SystemExit("error: no backups registered")
+
+    return row["id"]
+
+def restore_main(argv: list[str] | None = None) -> int:
+    p = argparse.ArgumentParser(
+        prog="pg-tune-restore",
+        description=(
+            "Restore a database from a pg-tune backup. DESTRUCTIVE — "
+            "drops and recreates the target database."
+        ),
+    )
+    p.add_argument(
+        "backup",
+        help=(
+            "Backup id, or '@latest' for the most recent backup of "
+            "the PGDATABASE target."
+        ),
+    )
+    p.add_argument(
+        "--confirm",
+        action="store_true",
+        help=(
+            "Actually run the restore. Without this flag, only a "
+            "dry-run summary is printed."
+        ),
+    )
+    args = p.parse_args(argv)
+
+    try:
+        backup_id = _resolve_backup_ref(args.backup, os.getenv("PGDATABASE"))
+
+        if not args.confirm:
+            info = inspect_restore(backup_id)
+            b = info["backup"]
+            print(f"Dry run. Backup #{b['id']} — {b['database']}")
+            print(f"  file:        {b['path']}")
+            print(f"  size:        {_human_bytes(b['size_bytes'])}")
+            print(f"  sha256:      {b['sha256']}")
+            print(f"  present:     {info['file_present']}")
+            print(f"  sha match:   {info['sha256_match']}")
+            print(f"  conns:       {len(info['active_connections'])}")
+            print(f"  allowed:     {info['allowed']}")
+            print(f"  writes env:  {info['writes_env']}")
+            print()
+            print(
+                f"⚠️  restore will DROP and recreate '{b['database']}'. "
+                "Re-run with --confirm."
+            )
+            return 0
+
+        result = do_restore(backup_id)
+        print(
+            f"restore complete: {result['database']} "
+            f"({_human_bytes(result['size_bytes'])}, "
+            f"{result['elapsed_s']:.1f} s)"
+        )
+        return 0
+    except RestoreError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+
+def list_backups_main(argv: list[str] | None = None) -> int:
+    p = argparse.ArgumentParser(
+        prog="pg-tune-list_backups",
+        description="List pg-tune backups registered in tune.db.",
+    )
+    p.add_argument(
+        "-d", "--database",
+        default=None,
+        help="Filter by database name.",
+    )
+    p.add_argument(
+        "-n", "--limit",
+        type=int,
+        default=20,
+        help="Show at most N rows (default: 20).",
+    )
+    args = p.parse_args(argv)
+
+    from pg_tune.config import DEFAULT_DB, _connect, _ensure_db
+    _ensure_db(DEFAULT_DB)
+
+    sql = (
+        "select id, ts, database, size_bytes, pg_version, "
+        "       restored_ts, path "
+        "from tune_backups"
+    )
+    params: list = []
+    if args.database:
+        sql += " where database = ?"
+        params.append(args.database)
+    sql += " order by ts desc limit ?"
+    params.append(args.limit)
+
+    with _connect(DEFAULT_DB) as conn:
+        rows = conn.execute(sql, params).fetchall()
+
+    if not rows:
+        print("No backups.")
+        return 0
+
+    # header
+        print(
+        f"{'id':>4}  {'ts':<24}  {'database':<20}  "
+        f"{'size':>10}  {'pg':<8}  state"
+    )
+    for r in rows:
+        if r["restored_ts"]:
+            state = f"restored {r['restored_ts'][:19]}"
+        else:
+            state = "available"
+        pg = (r["pg_version"] or "").splitlines()[0].strip() or "?"
+        print(
+            f"{r['id']:>4}  {r['ts']:<24}  {r['database']:<20}  "
+            f"{_human_bytes(r['size_bytes']):>10}  "
+            f"{pg:<8}  {state}"
+        )
+    return 0

@@ -21,6 +21,9 @@ dependencies = [
 
 [project.scripts]
 pg-tune-mcp = "pg_tune.server:main"
+pg-tune-backup  = "pg_tune.cli:backup_main"
+pg-tune-list-backups = "pg_tune.cli:list_backups_main"
+pg-tune-restore = "pg_tune.cli:restore_main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

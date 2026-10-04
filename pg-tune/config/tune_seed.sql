@@ -5,7 +5,8 @@ insert into tune_allows (action, enabled, description) values
     ('create_index_concurrent', 0, 'CREATE INDEX CONCURRENTLY'),
     ('drop_own_objects',   0, 'DROP objects created by pg-tune'),
     ('alter_role_guc',     0, 'ALTER ROLE ... SET ...'),
-    ('alter_database_guc', 0, 'ALTER DATABASE ... SET ...');
+    ('alter_database_guc', 0, 'ALTER DATABASE ... SET ...')
+    ('restore', 0, 'db restoration');
 
 insert into tune_vec_params (name, desc) values
     ('ela_time', 'elapsed time, ms');

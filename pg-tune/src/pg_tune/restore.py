@@ -148,8 +148,12 @@ def do_restore(
         raise RestoreError(
             f"pg_restore failed (exit {result.returncode}): "
             f"{result.stderr.strip() or result.stdout.strip()}\n"
-            f"The database '{database}' is now in an unknown state. "
-            f"Backup file: {path}"
+            f"Database '{database}' is left partially restored.\n"
+            f"Backup file: {path}\n"
+            f"To recover manually:\n"
+            f"  dropdb {database}\n"
+            f"  createdb {database} --template=template0\n"
+            f"  pg_restore -d {database} {path}"
         )
 
     elapsed = time.monotonic() - t0

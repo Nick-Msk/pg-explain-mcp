@@ -16,6 +16,21 @@ from pg_tune.config import BACKUP_DIR, _ensure_db
 class BackupError(RuntimeError):
     pass
 
+def _pg_server_version(database: str) -> str:
+    """Return `SHOW server_version` for the target database.
+
+    Uses psycopg with an explicit dbname so it does not depend on
+    PGDATABASE or the OS user name.
+    """
+    import psycopg
+    try:
+        with psycopg.connect(dbname=database, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute("show server_version")
+                row = cur.fetchone()
+    except psycopg.Error as e:
+        raise BackupError(f"cannot query server version: {e}") from e
+    return row[0] if row else "unknown"
 
 def _pg_explain_version() -> str:
     try:
@@ -40,23 +55,6 @@ def _target_database(database: str | None) -> str:
         )
     return db
 
-
-def _pg_server_version(env: dict[str, str]) -> str:
-    """Query `SHOW server_version` via psql — no psycopg dependency here."""
-    try:
-        out = subprocess.run(
-            ["psql", "-tA", "-c", "show server_version"],
-            env=env, capture_output=True, text=True, timeout=15,
-        )
-    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
-        raise BackupError(f"cannot query server version: {e}") from e
-    if out.returncode != 0:
-        raise BackupError(
-            f"psql failed: {out.stderr.strip() or out.stdout.strip()}"
-        )
-    return out.stdout.strip()
-
-
 def make_backup(
     database: str | None = None,
     backup_dir: Path | None = None,
@@ -75,8 +73,6 @@ def make_backup(
 
     if shutil.which("pg_dump") is None:
         raise BackupError("pg_dump not found on PATH")
-    if shutil.which("psql") is None:
-        raise BackupError("psql not found on PATH")
 
     db = _target_database(database)
     env = os.environ.copy()
@@ -89,9 +85,8 @@ def make_backup(
 
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     suffix = secrets.token_hex(2)
-    out_path = backup_dir / f"{db}_{ts}_{suffix}.dump"
+    out_path = backup_dir / f"{db}_{ts}_{suffix}.dump.zst"
 
-    pg_version = _pg_server_version(env)
     cmd = [
         "pg_dump",
         "-Fc",
@@ -118,6 +113,7 @@ def make_backup(
     size = out_path.stat().st_size
     digest = _sha256_of(out_path)
 
+    pg_version=_pg_server_version(db)
     backup_id = record_backup(
         database=db,
         path=out_path,
