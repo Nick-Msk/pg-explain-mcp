@@ -82,14 +82,37 @@ def _format_restore_dry_run(info: dict[str, Any]) -> str:
     else:
         lines.append(f"No active connections to '{b['database']}'.")
 
+    conns = info["active_connections"]
+    if conns:
+        lines += [
+            "",
+            f"⚠️  {len(conns)} active connection(s) to '{b['database']}'.",
+            "",
+            "    If any of them belongs to another MCP server",
+            "    (postgres-test1, universal-db-mcp, etc.), you MUST",
+            "    call that server's disconnect tool BEFORE restore:",
+            "",
+            "        postgres-test1.disconnect_database()",
+            "",
+            "    Otherwise that server will hang after DROP DATABASE",
+            "    and will need a manual process restart that you",
+            "    cannot perform yourself.",
+            "",
+            f"    Restore will DROP and recreate '{b['database']}'.",
+            "    After disconnecting, re-run with confirm=True.",
+        ]
+    else:
+        lines += [
+            "",
+            f"⚠️  Restore will DROP and recreate '{b['database']}'.",
+            "    No active connections — safe to proceed.",
+            "    Re-run with confirm=True.",
+        ]
+
     lines += [
         "",
         f"restore action enabled: {info['allowed']}",
         f"PG_TUNE_ALLOW_WRITES:   {info['writes_env']}",
-        "",
-        f"⚠️  Restore will DROP and recreate '{b['database']}'. "
-        "All connections will be terminated.",
-        "    Re-run with confirm=True to proceed.",
     ]
     return "\n".join(lines)
 
@@ -119,8 +142,27 @@ def backup(database: str | None = None) -> str:
 def restore(backup_id: int, confirm: bool = False) -> str:
     """Restore a database from a pg-tune backup.
 
-    ⚠️  DESTRUCTIVE. Drops and recreates the target database. All
-    active connections are terminated. Requires:
+    DESTRUCTIVE. Drops and recreates the target database via
+    DROP DATABASE ... WITH (FORCE). Every connection to the target
+    is terminated at the PostgreSQL level.
+
+    Other MCP servers or clients connected to the target database
+    will be forcibly disconnected. A client that does not handle
+    the disconnect cleanly (universal-db-mcp / postgres-test1 is
+    one such client) will hang and require a process restart,
+    which you cannot perform yourself.
+
+    REQUIRED WORKFLOW:
+
+      1. Call with confirm=False (dry-run). Read the list of
+         active connections carefully.
+      2. If any active connection belongs to another MCP server,
+         disconnect it first using that server's disconnect tool.
+      3. Only then call with confirm=True.
+
+    Do not skip step 1. Do not skip step 2 if connections exist.
+
+    Requires:
 
     - PG_TUNE_ALLOW_WRITES=yes;
     - `tune_allows['restore'] = 1`;
@@ -198,6 +240,40 @@ def list_backups(database: str = "", limit: int = 20) -> str:
             f"{r['id']:>4}  {r['ts']:<24}  {r['database']:<20}  "
             f"{_human_bytes(r['size_bytes']):>10}  {pg:<8}  {state}"
         )
+    return "\n".join(lines)
+
+@mcp.tool()
+def status() -> str:
+    """Show the current state of the target database.
+
+    Connects to PGDATABASE (the same one pg-tune backs up) and
+    lists user tables with row counts. Read-only.
+    """
+    import os
+
+    import psycopg
+
+    db = os.getenv("PGDATABASE")
+    if not db:
+        return "Error: PGDATABASE is not set"
+
+    with psycopg.connect(dbname=db, autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                select schemaname, relname, n_live_tup
+                from pg_stat_user_tables
+                order by schemaname, relname
+                """
+            )
+            rows = cur.fetchall()
+
+    if not rows:
+        return f"Database '{db}' has no user tables."
+
+    lines = [f"Database: {db}", "", f"{'schema':<12}  {'table':<24}  rows"]
+    for schema, table, n in rows:
+        lines.append(f"{schema:<12}  {table:<24}  {n:,}")
     return "\n".join(lines)
 
 def main() -> None:

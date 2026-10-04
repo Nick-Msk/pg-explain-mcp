@@ -36,8 +36,53 @@ environment flag.
    retry blindly, do not chain further writes. Report the error
    text and the path to the most recent backup so the user can
    recover.
+6. **Backup metadata lives in SQLite, not PostgreSQL.** The
+   `tune_backups` table is inside `config/tune.db` next to the
+   pg-tune server, not in the target database. To look it up, call
+   `list_backups`. Never query the target PostgreSQL database for
+   `tune_backups` — it does not exist there.
+7. **`restore` kills all connections to the target database.**
+   `DROP DATABASE ... WITH (FORCE)` terminates every session
+   connected to it — including other MCP servers  if they happen to be pointed at the same
+   database. A client that does not handle the disconnect will
+   hang or crash.
+
+   Correct workflow when another MCP server is connected to the
+   tuning target:
+
+   1. Call `disconnect_database` (or the equivalent
+      tool on whichever server) to close the connection cleanly.
+   2. Run `pg-tune.restore(...)`.
+   3. Call `connect_database` to re-establish the
+      connection to the freshly restored database.
+
+   Do not skip step 1. Do not assume the other server will
+   reconnect on its own.
+
 
 ## Available tools
+
+### `status() -> str`
+
+Shows the current state of the target database (the one `pg-tune`
+is configured to manage). Lists user tables with row counts.
+Read-only.
+
+Use this to verify what a restore actually restored. **Do not**
+use `postgres-test1.*` for this — that server may point at a
+different database, and calling it after a restore can hang if it
+was connected to the tuning target.
+
+### `list_backups(database="", limit=20) -> str`
+
+Lists registered backups, most recent first. Reads from the tune
+SQLite config — the target PostgreSQL database is not touched.
+
+Args:
+- `database` — filter by database name. Empty string returns all.
+- `limit` — return at most this many rows. Default 20.
+
+Use this before `restore` to look up ids.
 
 ### `backup(database=None) -> str`
 
@@ -96,6 +141,18 @@ When the user asks to restore:
 5. Wait for explicit user approval. Only then call
    `restore(backup_id, confirm=True)`.
 6. Report the result: database name, size restored, duration.
+7. After a restore, verify the result:
+
+    1. Call `pg-tune.status()`. It connects fresh to the target
+       database and lists the tables present.
+    2. Report the table list to the user.
+    3. If another MCP server (`postgres-test1`) was connected to the
+        target before the restore, remind the user that it needs to
+        be reconnected — do not silently try to reconnect it yourself
+        unless they ask.
+
+Never verify a restore by calling `postgres-test1.get_schema` or
+any other tool on a different server. Use `pg-tune.status`.
 
 When the user asks a diagnostic question ("why is this query
 slow?"):
