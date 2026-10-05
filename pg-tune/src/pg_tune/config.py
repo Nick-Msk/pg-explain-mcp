@@ -95,6 +95,17 @@ def list_allows(db_path: Path | str = DEFAULT_DB) -> list[dict[str, Any]]:
         ).fetchall()
     return [dict(r) for r in rows]
 
+def list_vec_params(
+    db_path: Path | str = DEFAULT_DB,
+) -> list[dict[str, Any]]:
+    """Return every row of tune_vec_params, ordered by name."""
+    _ensure_db(db_path)
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "select name, desc, measure "
+            "from tune_vec_params order by name"
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 def set_allow(
     action: str,

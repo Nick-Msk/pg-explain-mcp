@@ -22,14 +22,16 @@ class TestShow:
         assert "enabled" in out
         assert "disabled" in out
 
-    def test_header_present(self, cli_db, capsys):
+    def test_allows_header_present(self, cli_db, capsys):
         config_main(["--init"])
         capsys.readouterr()
         config_main(["--show"])
-        header = capsys.readouterr().out.splitlines()[0]
-        assert "action" in header
-        assert "state" in header
-        assert "description" in header
+        out = capsys.readouterr().out
+        # Header line lives inside the allows block, not at the
+        # very top — `--show` prints a section title first.
+        assert "action" in out
+        assert "state" in out
+        assert "description" in out
 
     def test_backup_shows_enabled(self, cli_db, capsys):
         config_main(["--init"])
@@ -140,4 +142,65 @@ class TestArgParsing:
         import pytest
         with pytest.raises(SystemExit):
             config_main(["--init", "--show"])
+
+class TestShowParams:
+    def test_lists_all_metrics(self, cli_db, capsys):
+        config_main(["--init"])
+        capsys.readouterr()
+        assert config_main(["--show-params"]) == 0
+        out = capsys.readouterr().out
+        assert "ela_time" in out
+        assert "shared_hit_blocks" in out
+        assert "temp_written_blocks" in out
+
+    def test_header_has_measure(self, cli_db, capsys):
+        config_main(["--init"])
+        capsys.readouterr()
+        config_main(["--show-params"])
+        header = capsys.readouterr().out.splitlines()[0]
+        assert "name" in header
+        assert "measure" in header
+        assert "description" in header
+
+    def test_measure_values(self, cli_db, capsys):
+        config_main(["--init"])
+        capsys.readouterr()
+        config_main(["--show-params"])
+        out = capsys.readouterr().out
+        line = next(
+            ln for ln in out.splitlines()
+            if ln.strip().startswith("ela_time")
+        )
+        assert " ms " in line
+
+class TestShowAll:
+    def test_contains_both_sections(self, cli_db, capsys):
+        config_main(["--init"])
+        capsys.readouterr()
+        assert config_main(["--show"]) == 0
+        out = capsys.readouterr().out
+        assert "tune_allows:" in out
+        assert "tune_vec_params:" in out
+        assert "backup" in out
+        assert "ela_time" in out
+
+    def test_allows_section_first(self, cli_db, capsys):
+        config_main(["--init"])
+        capsys.readouterr()
+        config_main(["--show"])
+        out = capsys.readouterr().out
+        idx_allows = out.index("tune_allows:")
+        idx_params = out.index("tune_vec_params:")
+        assert idx_allows < idx_params
+
+
+class TestShowAllows:
+    def test_only_allows(self, cli_db, capsys):
+        config_main(["--init"])
+        capsys.readouterr()
+        assert config_main(["--show-allows"]) == 0
+        out = capsys.readouterr().out
+        assert "backup" in out
+        assert "tune_vec_params" not in out
+        assert "ela_time" not in out
 

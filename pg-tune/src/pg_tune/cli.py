@@ -19,6 +19,33 @@ def _human_bytes(n: int | None) -> str:
         value /= 1024
     return f"{value:.1f} PB"
 
+def _print_allows(db_path) -> None:
+    from pg_tune.config import list_allows
+    rows = list_allows(db_path)
+    if not rows:
+        print("No actions registered.")
+        return
+    print(f"{'action':<26}  {'state':<10}  {'default':<10}  description")
+    for r in rows:
+        state = "enabled" if r["enabled"] else "disabled"
+        default = "enabled" if r["default_enabled"] else "disabled"
+        print(
+            f"{r['action']:<26}  {state:<10}  {default:<10}  "
+            f"{r['description']}"
+        )
+
+def _print_vec_params(db_path) -> None:
+    from pg_tune.config import list_vec_params
+    rows = list_vec_params(db_path)
+    if not rows:
+        print("No vector parameters registered.")
+        return
+    print(f"{'name':<24}  {'measure':<10}  description")
+    for r in rows:
+        print(
+            f"{r['name']:<24}  {r['measure']:<10}  {r['desc']}"
+        )
+
 
 def backup_main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
@@ -162,7 +189,17 @@ def config_main(argv: list[str] | None = None) -> int:
     g.add_argument(
         "--show",
         action="store_true",
-        help="Print the current tune_allows table.",
+        help="Print everything: allow-list and vector parameters.",
+    )
+    g.add_argument(
+        "--show-allows",
+        action="store_true",
+        help="Print the tune_allows table only.",
+    )
+    g.add_argument(
+        "--show-params",
+        action="store_true",
+        help="Print the tune_vec_params table only.",
     )
     g.add_argument(
         "--allow",
@@ -189,7 +226,6 @@ def config_main(argv: list[str] | None = None) -> int:
     from pg_tune.config import (
         DEFAULT_DB,
         init_db,
-        list_allows,
         reset_allow,
         set_allow,
     )
@@ -199,18 +235,21 @@ def config_main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.show:
-        rows = list_allows(DEFAULT_DB)
-        if not rows:
-            print("No actions registered.")
-            return 0
-        print(f"{'action':<26}  {'state':<10}  {'default':<10}  description")
-        for r in rows:
-            state = "enabled" if r["enabled"] else "disabled"
-            default = "enabled" if r["default_enabled"] else "disabled"
-            print(
-                f"{r['action']:<26}  {state:<10}  {default:<10}  "
-                f"{r['description']}"
-            )
+        print("tune_allows:")
+        print()
+        _print_allows(DEFAULT_DB)
+        print()
+        print("tune_vec_params:")
+        print()
+        _print_vec_params(DEFAULT_DB)
+        return 0
+
+    if args.show_allows:
+        _print_allows(DEFAULT_DB)
+        return 0
+
+    if args.show_params:
+        _print_vec_params(DEFAULT_DB)
         return 0
 
     if args.allow:
