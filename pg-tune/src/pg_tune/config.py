@@ -85,6 +85,96 @@ def is_allowed(
         ).fetchone()
     return bool(row and row["enabled"])
 
+def list_allows(db_path: Path | str = DEFAULT_DB) -> list[dict[str, Any]]:
+    """Return every row of tune_allows, ordered by action name."""
+    _ensure_db(db_path)
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "select action, enabled, default_enabled, description "
+            "from tune_allows order by action"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def set_allow(
+    action: str,
+    enabled: bool | int,
+    db_path: Path | str = DEFAULT_DB,
+) -> dict[str, Any]:
+    """Set the enabled flag for one action.
+
+    ``enabled`` accepts bool or int; anything truthy becomes 1.
+    Returns ``{"action", "old", "new", "description"}``.
+    Raises ``KeyError`` if the action is not registered.
+    """
+    _ensure_db(db_path)
+    new = 1 if enabled else 0
+
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "select enabled, description from tune_allows where action = ?",
+            (action,),
+        ).fetchone()
+        if row is None:
+            raise KeyError(f"unknown action: {action!r}")
+
+        old = row["enabled"]
+        conn.execute(
+            "update tune_allows set enabled = ? where action = ?",
+            (new, action),
+        )
+        conn.commit()
+
+    return {
+        "action": action,
+        "old": old,
+        "new": new,
+        "description": row["description"],
+    }
+
+def reset_allow(
+    action: str = "",
+    db_path: Path | str = DEFAULT_DB,
+) -> list[dict[str, Any]]:
+    """Reset one action (or all) to default_enabled.
+
+    Returns the list of changes. Empty list when already at defaults.
+    Raises ``KeyError`` if a specific ``action`` is not registered.
+    """
+    _ensure_db(db_path)
+
+    with _connect(db_path) as conn:
+        if action:
+            rows = conn.execute(
+                "select action, enabled, default_enabled, description "
+                "from tune_allows where action = ?",
+                (action,),
+            ).fetchall()
+            if not rows:
+                raise KeyError(f"unknown action: {action!r}")
+        else:
+            rows = conn.execute(
+                "select action, enabled, default_enabled, description "
+                "from tune_allows order by action"
+            ).fetchall()
+
+        changes = []
+        for r in rows:
+            if r["enabled"] == r["default_enabled"]:
+                continue
+            conn.execute(
+                "update tune_allows set enabled = ? where action = ?",
+                (r["default_enabled"], r["action"]),
+            )
+            changes.append({
+                "action": r["action"],
+                "old": r["enabled"],
+                "new": r["default_enabled"],
+                "description": r["description"],
+            })
+        conn.commit()
+
+    return changes
 
 def record_backup(
     database: str,

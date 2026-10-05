@@ -243,6 +243,66 @@ def list_backups(database: str = "", limit: int = 20) -> str:
     return "\n".join(lines)
 
 @mcp.tool()
+def list_allows() -> str:
+    """Show every registered write action and its current state.
+
+    Reads from the tune SQLite config (tune_allows). This is the
+    allow-list that gates every write operation pg-tune can perform:
+    restore, ANALYZE, CREATE INDEX, and so on.
+
+    A fresh install has only `backup` enabled. Everything else must
+    be turned on explicitly with `set_allow` (or the CLI).
+    """
+    from pg_tune.config import DEFAULT_DB, list_allows as _list
+
+    rows = _list(DEFAULT_DB)
+    if not rows:
+        return "No actions registered."
+
+    lines = [
+        f"{'action':<26}  {'state':<10}  {'default':<10}  description"
+    ]
+    for r in rows:
+        state = "enabled" if r["enabled"] else "disabled"
+        default = "enabled" if r["default_enabled"] else "disabled"
+        lines.append(
+            f"{r['action']:<26}  {state:<10}  {default:<10}  "
+            f"{r['description']}"
+        )
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def set_allow(action: str, enabled: bool) -> str:
+    """Enable or disable a write action.
+
+    This is a security-relevant operation: turning `restore` on
+    means an LLM can then drop and recreate the target database.
+    Ask the user before flipping a switch, especially for
+    `restore`, `create_index`, and `drop_own_objects`.
+
+    Args:
+        action:  Action name, e.g. ``restore``, ``analyze``,
+                 ``create_index``. Case-sensitive.
+        enabled: True to allow, False to deny.
+
+    Use ``list_allows()`` to see the full list of action names.
+    """
+    from pg_tune.config import DEFAULT_DB, set_allow as _set
+
+    try:
+        result = _set(action, enabled, DEFAULT_DB)
+    except KeyError as e:
+        return f"Error: {e}. Call list_allows() to see valid names."
+
+    old = "enabled" if result["old"] else "disabled"
+    new = "enabled" if result["new"] else "disabled"
+    return (
+        f"{result['action']}: {old} → {new}\n"
+        f"  {result['description']}"
+    )
+
+@mcp.tool()
 def status() -> str:
     """Show the current state of the target database.
 

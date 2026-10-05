@@ -1,12 +1,12 @@
-insert into tune_allows (action, enabled, description) values
-    ('set_session_guc',    0, 'SET LOCAL work_mem / enable_* in a rolled-back transaction'),
-    ('analyze',            0, 'ANALYZE on a table'),
-    ('create_index',       0, 'CREATE INDEX (blocking)'),
-    ('create_index_concurrent', 0, 'CREATE INDEX CONCURRENTLY'),
-    ('drop_own_objects',   0, 'DROP objects created by pg-tune'),
-    ('alter_role_guc',     0, 'ALTER ROLE ... SET ...'),
-    ('alter_database_guc', 0, 'ALTER DATABASE ... SET ...')
-    ('restore', 0, 'db restoration');
+insert into tune_allows
+    (action, enabled, default_enabled, description) values
+    ('backup',                  1, 1, 'Snapshot the target database with pg_dump | zstd'),
+    ('restore',                 0, 0, 'Drop and restore from a tune_backups entry (DESTRUCTIVE)'),
+    ('set_session_guc',         0, 0, 'SET LOCAL in a rolled-back transaction'),
+    ('analyze',                 0, 0, 'ANALYZE on a table'),
+    ('create_index',            0, 0, 'CREATE INDEX (blocking)'),
+    ('create_index_concurrent', 0, 0, 'CREATE INDEX CONCURRENTLY'),
+    ('drop_own_objects',        0, 0, 'DROP objects created by pg-tune');
 
 insert into tune_vec_params (name, desc) values
     ('ela_time', 'elapsed time, ms');

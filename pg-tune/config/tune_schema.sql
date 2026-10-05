@@ -24,6 +24,8 @@ create table tune_allows (
     action       text primary key,     -- 'create_index', 'set_guc', 'analyze', ...
     enabled      integer not null default 0
                  check (enabled in (0, 1)),
+    default_enabled  integer not null default 0
+                     check (default_enabled in (0, 1)),
     description  text not null
 );
 

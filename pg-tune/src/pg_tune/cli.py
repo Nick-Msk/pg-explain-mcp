@@ -148,6 +148,106 @@ def restore_main(argv: list[str] | None = None) -> int:
         print(f"error: {e}", file=sys.stderr)
         return 1
 
+def config_main(argv: list[str] | None = None) -> int:
+    p = argparse.ArgumentParser(
+        prog="pg-tune-config",
+        description="Manage the pg-tune SQLite configuration.",
+    )
+    g = p.add_mutually_exclusive_group(required=True)
+    g.add_argument(
+        "--init",
+        action="store_true",
+        help="Rebuild tune.db from schema + seed.",
+    )
+    g.add_argument(
+        "--show",
+        action="store_true",
+        help="Print the current tune_allows table.",
+    )
+    g.add_argument(
+        "--allow",
+        metavar="ACTION",
+        help="Enable a write action (e.g. restore).",
+    )
+    g.add_argument(
+        "--deny",
+        metavar="ACTION",
+        help="Disable a write action.",
+    )
+    g.add_argument(
+        "--reset",
+        nargs="?",
+        const="",
+        metavar="ACTION",
+        help=(
+            "Reset one action (or all if ACTION is omitted) to its "
+            "seed default."
+        ),
+    )
+    args = p.parse_args(argv)
+
+    from pg_tune.config import (
+        DEFAULT_DB,
+        init_db,
+        list_allows,
+        reset_allow,
+        set_allow,
+    )
+
+    if args.init:
+        init_db(DEFAULT_DB)
+        return 0
+
+    if args.show:
+        rows = list_allows(DEFAULT_DB)
+        if not rows:
+            print("No actions registered.")
+            return 0
+        print(f"{'action':<26}  {'state':<10}  {'default':<10}  description")
+        for r in rows:
+            state = "enabled" if r["enabled"] else "disabled"
+            default = "enabled" if r["default_enabled"] else "disabled"
+            print(
+                f"{r['action']:<26}  {state:<10}  {default:<10}  "
+                f"{r['description']}"
+            )
+        return 0
+
+    if args.allow:
+        try:
+            r = set_allow(args.allow, True, DEFAULT_DB)
+        except KeyError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
+        print(f"{r['action']}: enabled")
+        return 0
+
+    if args.deny:
+        try:
+            r = set_allow(args.deny, False, DEFAULT_DB)
+        except KeyError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
+        print(f"{r['action']}: disabled")
+        return 0
+
+    if args.reset is not None:
+        try:
+            changes = reset_allow(args.reset, DEFAULT_DB)
+        except KeyError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
+        if not changes:
+            print("Already at defaults.")
+            return 0
+        for c in changes:
+            old = "enabled" if c["old"] else "disabled"
+            new = "enabled" if c["new"] else "disabled"
+            print(f"{c['action']}: {old} → {new}")
+        return 0
+
+    return 0
+
 def list_backups_main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
         prog="pg-tune-list_backups",
