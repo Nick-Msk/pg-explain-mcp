@@ -28,3 +28,11 @@ pg-tune-config = "pg_tune.cli:config_main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+markers = [
+    "integration: requires a live PostgreSQL (set PG_TEST_INTEGRATION=1)",
+]
+

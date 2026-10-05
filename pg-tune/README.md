@@ -197,6 +197,13 @@ Additional console scripts after install:
 - `pg-tune-mcp` — the write-capable tuning server.
 - `pg-tune-config` — the tuning registry CLI.
 
+## Tests
+
+```bash
+cd pg-tune
+pytest -v                                  # offline suite, ~1s
+PG_TEST_INTEGRATION=1 pytest -v            # + live-PostgreSQL tests
+
 ## Roadmap
 
 - **Apply fixes.** The allow-list already gates `set_session_guc`,
