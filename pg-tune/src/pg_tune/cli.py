@@ -40,12 +40,15 @@ def _print_vec_params(db_path) -> None:
     if not rows:
         print("No vector parameters registered.")
         return
-    print(f"{'name':<24}  {'measure':<10}  description")
+    print(
+        f"{'name':<24}  {'scope':<10}  {'raw_key':<22}  "
+        f"{'measure':<8}  description"
+    )
     for r in rows:
         print(
-            f"{r['name']:<24}  {r['measure']:<10}  {r['desc']}"
+            f"{r['name']:<24}  {r['scope']:<10}  {r['raw_key']:<22}  "
+            f"{r['measure']:<8}  {r['desc']}"
         )
-
 
 def backup_main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(

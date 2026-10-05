@@ -117,13 +117,22 @@ is what `reset` returns to — it never changes after `--init`, so
 
 **Via CLI:**
 
+### `pg-tune-config`
+
 ```bash
-pg-tune-config --init                   # create tune.db from schema + seed
-pg-tune-config --show                   # print the allow-list
-pg-tune-config --allow restore          # enable one action
-pg-tune-config --deny  restore          # disable one action
-pg-tune-config --reset restore          # reset one action to default
-pg-tune-config --reset                  # reset everything to defaults
+pg-tune-config --init                 # rebuild tune.db from schema + seed
+pg-tune-config --show                 # print tune_allows + tune_vec_params
+pg-tune-config --show-allows          # only the allow-list
+pg-tune-config --show-params          # only the metric registry
+
+pg-tune-config --allow restore        # enable one write action
+pg-tune-config --deny  restore        # disable one write action
+pg-tune-config --reset restore        # reset one action to default
+pg-tune-config --reset                # reset everything to defaults
+
+--show-allows and --show-params are the single-purpose
+variants of --show; scripted use should prefer them, since their
+output does not depend on the other section's formatting.
 
 **Via MCP (from an agent chat):**
 
@@ -137,15 +146,48 @@ calling set_allow(..., True). Disabling is always safe.
 ### Statistics vector
 
 Metrics recorded alongside every run are declared in
-`tune_vec_params`. A fresh install ships with `ela_time` (elapsed
-time, ms). More land as they are wired up (`disk_read_bytes`,
-`disk_write_bytes`, `temp_read_bytes`, `temp_write_bytes`,
-`plan_cost`, `plan_rows`, …). Adding a metric is a row insert — no
-schema change.
+`tune_vec_params`. Each row names a metric, its unit, where it is
+read from, and the raw EXPLAIN key:
+
+| Column    | Meaning                                                     |
+|-----------|-------------------------------------------------------------|
+| `name`    | metric id, used as the key in `tune_audit_vector.vec_name`  |
+| `desc`    | human-readable description                                  |
+| `measure` | unit — `ms`, `blocks`, …                                    |
+| `scope`   | `root_meta` or `root_plan` — where the value lives          |
+| `raw_key` | field name inside that scope                                |
+
+Fresh install ships seven metrics:
+
+| name                    | scope       | raw_key              | measure |
+|-------------------------|-------------|----------------------|---------|
+| `ela_time`              | `root_meta` | `Execution Time`     | ms      |
+| `shared_hit_blocks`     | `root_plan` | `Shared Hit Blocks`  | blocks  |
+| `shared_read_blocks`    | `root_plan` | `Shared Read Blocks` | blocks  |
+| `temp_read_blocks`      | `root_plan` | `Temp Read Blocks`   | blocks  |
+| `temp_written_blocks`   | `root_plan` | `Temp Written Blocks`| blocks  |
+| `shared_i_o_read_time`  | `root_plan` | `Shared I/O Read Time` | ms    |
+| `temp_i_o_write_time`   | `root_plan` | `Temp I/O Write Time` | ms     |
+
+`scope` and `raw_key` are the whole point: adding a new metric is
+a single `INSERT`, no code change. `pg_tune.vector.extract_vector`
+reads whatever `tune_vec_params` declares, in one pass over the
+plan JSON, no additional database queries.
 
 Values for a given audit row live in `tune_audit_vector`, one row
 per `(audit_id, phase, vec_name)`. `phase` is `'B'` (before) or
-`'A'` (after).
+`'A'` (after). Values are absolute — blocks, milliseconds — not
+normalized per row.
+
+To add a metric:
+
+```bash
+sqlite3 config/tune.db \
+  "insert into tune_vec_params (name, desc, measure, scope, raw_key)
+   values ('wal_bytes', 'WAL bytes generated', 'bytes',
+           'root_plan', 'WAL Bytes');"```
+
+The next pg-tune status / tune run picks it up automatically.
 
 ## Safety model
 

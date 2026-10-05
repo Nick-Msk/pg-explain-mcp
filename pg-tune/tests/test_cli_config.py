@@ -153,16 +153,15 @@ class TestShowParams:
         assert "shared_hit_blocks" in out
         assert "temp_written_blocks" in out
 
-    def test_header_has_measure(self, cli_db, capsys):
+    def test_header_has_all_columns(self, cli_db, capsys):
         config_main(["--init"])
         capsys.readouterr()
         config_main(["--show-params"])
         header = capsys.readouterr().out.splitlines()[0]
-        assert "name" in header
-        assert "measure" in header
-        assert "description" in header
+        for col in ("name", "scope", "raw_key", "measure", "description"):
+            assert col in header, f"missing column in header: {col}"
 
-    def test_measure_values(self, cli_db, capsys):
+    def test_ela_time_shows_root_meta(self, cli_db, capsys):
         config_main(["--init"])
         capsys.readouterr()
         config_main(["--show-params"])
@@ -171,7 +170,8 @@ class TestShowParams:
             ln for ln in out.splitlines()
             if ln.strip().startswith("ela_time")
         )
-        assert " ms " in line
+        assert "root_meta" in line
+        assert "Execution Time" in line
 
 class TestShowAll:
     def test_contains_both_sections(self, cli_db, capsys):

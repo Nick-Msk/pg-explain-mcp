@@ -54,7 +54,9 @@ create table tune_audit (
 create table tune_vec_params (
     name     text primary key,              -- 'ela_time', 'disk_read_bytes', …
     desc     text not null,
-    measure  text not null
+    measure  text not null,
+    scope    text not null check (scope in ('root_meta', 'root_plan')),
+    raw_key  text not null
 );
 
 create table tune_audit_vector (

@@ -29,12 +29,20 @@ expected.
 | `test_config_allows.py` | `list_allows` / `set_allow` / `reset_allow` |
 | `test_cli_config.py`    | `pg-tune-config` argument parsing + output  |
 | `test_backup.py`        | `make_backup` with mocked `subprocess.run`  |
+| `test_vector.py`        | `extract_vector` — data-driven metric pull  |
 
 Offline tests never touch a real database. `subprocess.run` is
 replaced with a stub that writes a small file to a sandbox
 directory, so `pg_dump` is never invoked. Nothing leaks into
 `config/tune.db` or `config/backups/` — the fixtures redirect both
 paths to `tests/test_tune.db` and `tests/test_backups/`.
+
+`test_vector.py` is a pure-function test — it feeds synthetic plan
+dicts to `extract_vector` and checks the returned metric map. It
+also asserts that the seed rows in `tune_vec_params` are
+well-formed (`scope` in the allowed set, `raw_key` non-empty), so
+a typo in the seed is caught before it silently drops a metric out
+of every future vector.
 
 ## What integration tests cover
 

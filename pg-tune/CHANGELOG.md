@@ -13,6 +13,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`tune_vec_params` registry.** Metrics for `tune_audit_vector`
+  are now declared in SQLite, not hardcoded. Each row carries
+  `name`, `desc`, `measure`, `scope`, and `raw_key`. Fresh install
+  ships seven metrics: `ela_time`, `shared_hit_blocks`,
+  `shared_read_blocks`, `temp_read_blocks`, `temp_written_blocks`,
+  `shared_i_o_read_time`, `temp_i_o_write_time`.
+
+- **`pg_tune.vector.extract_vector`.** Reads a raw EXPLAIN ANALYZE
+  payload and returns `{metric_name: value}`, driven entirely by
+  `tune_vec_params`. Adding a metric is one `INSERT` — no code
+  change. Missing metrics are omitted rather than recorded as 0.
+
+- **`pg-tune-config --show-allows` / `--show-params`.** Single-
+  purpose variants of `--show`, for scripted use where the other
+  section's formatting should not matter.
+
+### Changed
+
+- **`pg-tune-config --show` now prints both sections.** Output
+  starts with `tune_allows:` then `tune_vec_params:`. Previously
+  only the allow-list was printed.
+
+- **`--show-params` output includes `scope` and `raw_key`.** The
+  full definition of each metric is visible in one place.
+
+### Added
+
 - **Allow-list management API.** `tune_allows` now carries
   `default_enabled` alongside `enabled`, so `reset` has a defined
   target. Three new functions in `config.py` — `list_allows()`,

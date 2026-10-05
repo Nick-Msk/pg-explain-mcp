@@ -102,7 +102,7 @@ def list_vec_params(
     _ensure_db(db_path)
     with _connect(db_path) as conn:
         rows = conn.execute(
-            "select name, desc, measure "
+            "select name, desc, measure, scope, raw_key "
             "from tune_vec_params order by name"
         ).fetchall()
     return [dict(r) for r in rows]

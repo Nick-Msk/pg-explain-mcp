@@ -8,14 +8,14 @@ insert into tune_allows
     ('create_index_concurrent', 0, 0, 'CREATE INDEX CONCURRENTLY'),
     ('drop_own_objects',        0, 0, 'DROP objects created by pg-tune');
 
-insert or ignore into tune_vec_params (name, desc, measure) values
-    ('ela_time',              'elapsed time',            'ms'),
-    ('shared_hit_blocks',     'buffer cache hits',       'blocks'),
-    ('shared_read_blocks',    'disk reads',              'blocks'),
-    ('temp_read_blocks',      'temp file reads',         'blocks'),
-    ('temp_written_blocks',   'temp file writes',        'blocks'),
-    ('shared_i_o_read_time',  'I/O read time',           'ms'),
-    ('temp_i_o_write_time',   'temp write time',         'ms');
+insert into tune_vec_params (name, desc, measure, scope, raw_key) values
+    ('ela_time',              'elapsed time',         'ms',     'root_meta', 'Execution Time'),
+    ('shared_hit_blocks',     'buffer cache hits',    'blocks', 'root_plan', 'Shared Hit Blocks'),
+    ('shared_read_blocks',    'disk reads',           'blocks', 'root_plan', 'Shared Read Blocks'),
+    ('temp_read_blocks',      'temp file reads',      'blocks', 'root_plan', 'Temp Read Blocks'),
+    ('temp_written_blocks',   'temp file writes',     'blocks', 'root_plan', 'Temp Written Blocks'),
+    ('shared_i_o_read_time',  'I/O read time',        'ms',     'root_plan', 'Shared I/O Read Time'),
+    ('temp_i_o_write_time',   'temp write time',      'ms',     'root_plan', 'Temp I/O Write Time');
 
 -- Planned, add as features land:
 --   ('disk_read_bytes',   'bytes read from disk'),
