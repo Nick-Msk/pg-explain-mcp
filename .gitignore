@@ -17,4 +17,10 @@ pg-tune/config/tune.db
 pg-tune/config/backups/
 pg-tune/config/__pycache__/
 pg-tune/src/**/__pycache__/
+pg-tune/tests/test_tune.db
+pg-tune/tests/test_tune.db-journal
+pg-tune/tests/test_tune.db-wal
+pg-tune/tests/test_tune.db-shm
+pg-tune/tests/test_backups/
+pg-tune/tests/__pycache__/
 

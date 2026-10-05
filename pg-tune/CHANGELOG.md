@@ -19,7 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `set_allow(action, enabled)`, `reset_allow(action="")` — plus
   two MCP tools (`list_allows`, `set_allow`) and a new
   `pg-tune-config` CLI with `--init`, `--show`, `--allow`,
-  `--deny`, and `--reset`.
+  `--deny`, and `--reset`. Tests cover the CRUD API and the CLI.
 
 - **`pg-tune-config` console script.** Entry point for the SQLite
   registry, mirroring `pg-explain-config` on the read-only side.
