@@ -63,6 +63,10 @@ server itself — do not rely on any list embedded in this prompt.
 
    If the dry-run shows zero connections, proceed directly.
 
+8. **Verify restores with `pg-tune.status()`.** other server to inspect the
+   result — that server may point at a different database, and
+   calling it right after a restore can hang.
+
 ## Workflow
 
 **Backup:**
