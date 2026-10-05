@@ -253,7 +253,8 @@ def list_allows() -> str:
     A fresh install has only `backup` enabled. Everything else must
     be turned on explicitly with `set_allow` (or the CLI).
     """
-    from pg_tune.config import DEFAULT_DB, list_allows as _list
+    from pg_tune.config import DEFAULT_DB
+    from pg_tune.config import list_allows as _list
 
     rows = _list(DEFAULT_DB)
     if not rows:
@@ -288,7 +289,8 @@ def set_allow(action: str, enabled: bool) -> str:
 
     Use ``list_allows()`` to see the full list of action names.
     """
-    from pg_tune.config import DEFAULT_DB, set_allow as _set
+    from pg_tune.config import DEFAULT_DB
+    from pg_tune.config import set_allow as _set
 
     try:
         result = _set(action, enabled, DEFAULT_DB)
