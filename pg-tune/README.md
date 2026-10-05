@@ -101,24 +101,38 @@ independent of `checks.db` used by `pg-explain-mcp`.
 
 Which write actions are permitted. Defaults on a fresh install:
 
-| Action                      | Default | What it does                                |
-|-----------------------------|---------|---------------------------------------------|
-| `backup`                    | on      | `pg_dump \| zstd` snapshot (read-only)      |
-| `restore`                   | off     | Drop and restore from a backup              |
-| `set_session_guc`           | off     | `SET LOCAL` inside a rolled-back txn        |
-| `analyze`                   | off     | `ANALYZE` on a table                        |
-| `create_index`              | off     | `CREATE INDEX` (blocking)                   |
-| `create_index_concurrent`   | off     | `CREATE INDEX CONCURRENTLY`                 |
-| `drop_own_objects`          | off     | `DROP` objects pg-tune created earlier      |
+| Action                    | Default | What it does                            |
+|---------------------------|---------|-----------------------------------------|
+| `backup`                  | on      | `pg_dump \| zstd` snapshot (read-only)  |
+| `restore`                 | off     | Drop and restore from a backup          |
+| `set_session_guc`         | off     | `SET LOCAL` inside a rolled-back txn    |
+| `analyze`                 | off     | `ANALYZE` on a table                    |
+| `create_index`            | off     | `CREATE INDEX` (blocking)               |
+| `create_index_concurrent` | off     | `CREATE INDEX CONCURRENTLY`             |
+| `drop_own_objects`        | off     | `DROP` objects pg-tune created earlier  |
 
-Enable what you need:
+Each row carries `enabled` and `default_enabled`. The second one
+is what `reset` returns to — it never changes after `--init`, so
+"reset to factory" always has a defined target.
+
+**Via CLI:**
 
 ```bash
-pg-tune-config --init                        # create tune.db from schema + seed
-pg-tune-config --allow set_session_guc
-pg-tune-config --allow analyze
-pg-tune-config --show                        # print current state
-```
+pg-tune-config --init                   # create tune.db from schema + seed
+pg-tune-config --show                   # print the allow-list
+pg-tune-config --allow restore          # enable one action
+pg-tune-config --deny  restore          # disable one action
+pg-tune-config --reset restore          # reset one action to default
+pg-tune-config --reset                  # reset everything to defaults
+
+**Via MCP (from an agent chat):**
+
+list_allows()                            # show all actions and states
+set_allow("restore", True)               # enable
+set_allow("restore", False)              # disable
+Turning an action on is security-relevant — it grants the LLM
+the ability to modify the database. Confirm with the user before
+calling set_allow(..., True). Disabling is always safe.
 
 ### Statistics vector
 
@@ -182,6 +196,19 @@ Additional console scripts after install:
 
 - `pg-tune-mcp` — the write-capable tuning server.
 - `pg-tune-config` — the tuning registry CLI.
+
+## Roadmap
+
+- **Apply fixes.** The allow-list already gates `set_session_guc`,
+  `analyze`, `create_index`, and `drop_own_objects`, but only
+  `backup` and `restore` are wired to tools. The tuning loop
+  (diagnose → fix → re-measure) lands next.
+- **Audit for `tune_allows` changes.** Every flip of an enable
+  switch should land in `tune_audit`, so a rogue `set_allow`
+  in the middle of the night is visible afterwards.
+- **`tune_blacklist` enforcement.** The safety model mentions a
+  host blacklist; the table exists in schema but startup does
+  not yet refuse to run against matching hosts.
 
 ## License
 

@@ -74,6 +74,15 @@ by construction: `SET TRANSACTION READ ONLY` on every connection,
 no DDL, no DML. It can be pointed at production replicas safely.
 `pg-tune` cannot.
 
+## Allow-list
+
+Every write action is gated by `tune_allows`. Flipping a switch
+from `0` to `1` grants pg-tune — and the LLM driving it — the
+ability to perform that action. Enabling `restore` means the next
+`restore(confirm=True)` will drop and recreate the target
+database. Treat the allow-list as a security boundary, not a
+convenience toggle.
+
 ## License
 
 See [LICENSE](LICENSE). Provided "as is", without warranty of any
