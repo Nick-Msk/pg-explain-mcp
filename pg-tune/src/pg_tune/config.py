@@ -59,7 +59,7 @@ def init_db(db_path: Path | str = DEFAULT_DB) -> None:
         "drop table if exists tune_audit_vector",
         "drop table if exists tune_vec_params",
         "drop table if exists tune_audit",
-        "drop table if exists tune_allows",
+        "drop table if exists tune_settings",
         "drop table if exists tune_backups",
     )
 
@@ -72,120 +72,130 @@ def init_db(db_path: Path | str = DEFAULT_DB) -> None:
     print(f"Initialized {db_path}", file=sys.stderr)
 
 
+def list_settings(
+    category: str = "",
+    db_path: Path | str = DEFAULT_DB,
+) -> list[dict[str, Any]]:
+    """Return rows of tune_settings, optionally filtered by category."""
+    _ensure_db(db_path)
+    sql = (
+        "select category, name, value, default_value, desc "
+        "from tune_settings"
+    )
+    params: list = []
+    if category:
+        sql += " where category = ?"
+        params.append(category)
+    sql += " order by category, name"
+    with _connect(db_path) as conn:
+        return [dict(r) for r in conn.execute(sql, params).fetchall()]
+
+
+def get_setting(
+    category: str,
+    name: str,
+    db_path: Path | str = DEFAULT_DB,
+) -> str | None:
+    _ensure_db(db_path)
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "select value from tune_settings "
+            "where category = ? and name = ?",
+            (category, name),
+        ).fetchone()
+    return row["value"] if row else None
+
+
+def set_setting(
+    category: str,
+    name: str,
+    value: str,
+    db_path: Path | str = DEFAULT_DB,
+) -> dict[str, Any]:
+    _ensure_db(db_path)
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "select value, default_value, desc from tune_settings "
+            "where category = ? and name = ?",
+            (category, name),
+        ).fetchone()
+        if row is None:
+            raise KeyError(f"unknown setting: {category}.{name}")
+        conn.execute(
+            "update tune_settings set value = ? "
+            "where category = ? and name = ?",
+            (value, category, name),
+        )
+        conn.commit()
+    return {
+        "category": category,
+        "name": name,
+        "old": row["value"],
+        "new": value,
+        "default": row["default_value"],
+        "desc": row["desc"],
+    }
+
+
+def reset_setting(
+    category: str = "",
+    name: str = "",
+    db_path: Path | str = DEFAULT_DB,
+) -> list[dict[str, Any]]:
+    """Reset by category, by (category, name), or everything.
+
+    Empty category and name resets every row. Raising for a
+    specific (category, name) that does not exist is intentional —
+    a typo should fail, not silently no-op.
+    """
+    _ensure_db(db_path)
+    where: list[str] = []
+    params: list = []
+    if category:
+        where.append("category = ?")
+        params.append(category)
+    if name:
+        where.append("name = ?")
+        params.append(name)
+
+    sql = (
+        "select category, name, value, default_value, desc "
+        "from tune_settings"
+    )
+    if where:
+        sql += " where " + " and ".join(where)
+
+    with _connect(db_path) as conn:
+        rows = conn.execute(sql, params).fetchall()
+        if (category or name) and not rows:
+            raise KeyError(
+                f"unknown setting: {category}.{name}".rstrip(".")
+            )
+        changes = []
+        for r in rows:
+            if r["value"] == r["default_value"]:
+                continue
+            conn.execute(
+                "update tune_settings set value = ? "
+                "where category = ? and name = ?",
+                (r["default_value"], r["category"], r["name"]),
+            )
+            changes.append({
+                "category": r["category"],
+                "name": r["name"],
+                "old": r["value"],
+                "new": r["default_value"],
+            })
+        conn.commit()
+    return changes
+
+
 def is_allowed(
     action: str,
     db_path: Path | str = DEFAULT_DB,
 ) -> bool:
-    """True if the given action is enabled in tune_allows."""
-    _ensure_db(db_path)
-    with _connect(db_path) as conn:
-        row = conn.execute(
-            "select enabled from tune_allows where action = ?",
-            (action,),
-        ).fetchone()
-    return bool(row and row["enabled"])
-
-def list_allows(db_path: Path | str = DEFAULT_DB) -> list[dict[str, Any]]:
-    """Return every row of tune_allows, ordered by action name."""
-    _ensure_db(db_path)
-    with _connect(db_path) as conn:
-        rows = conn.execute(
-            "select action, enabled, default_enabled, description "
-            "from tune_allows order by action"
-        ).fetchall()
-    return [dict(r) for r in rows]
-
-def list_vec_params(
-    db_path: Path | str = DEFAULT_DB,
-) -> list[dict[str, Any]]:
-    """Return every row of tune_vec_params, ordered by name."""
-    _ensure_db(db_path)
-    with _connect(db_path) as conn:
-        rows = conn.execute(
-            "select name, desc, measure, scope, raw_key "
-            "from tune_vec_params order by name"
-        ).fetchall()
-    return [dict(r) for r in rows]
-
-def set_allow(
-    action: str,
-    enabled: bool | int,
-    db_path: Path | str = DEFAULT_DB,
-) -> dict[str, Any]:
-    """Set the enabled flag for one action.
-
-    ``enabled`` accepts bool or int; anything truthy becomes 1.
-    Returns ``{"action", "old", "new", "description"}``.
-    Raises ``KeyError`` if the action is not registered.
-    """
-    _ensure_db(db_path)
-    new = 1 if enabled else 0
-
-    with _connect(db_path) as conn:
-        row = conn.execute(
-            "select enabled, description from tune_allows where action = ?",
-            (action,),
-        ).fetchone()
-        if row is None:
-            raise KeyError(f"unknown action: {action!r}")
-
-        old = row["enabled"]
-        conn.execute(
-            "update tune_allows set enabled = ? where action = ?",
-            (new, action),
-        )
-        conn.commit()
-
-    return {
-        "action": action,
-        "old": old,
-        "new": new,
-        "description": row["description"],
-    }
-
-def reset_allow(
-    action: str = "",
-    db_path: Path | str = DEFAULT_DB,
-) -> list[dict[str, Any]]:
-    """Reset one action (or all) to default_enabled.
-
-    Returns the list of changes. Empty list when already at defaults.
-    Raises ``KeyError`` if a specific ``action`` is not registered.
-    """
-    _ensure_db(db_path)
-
-    with _connect(db_path) as conn:
-        if action:
-            rows = conn.execute(
-                "select action, enabled, default_enabled, description "
-                "from tune_allows where action = ?",
-                (action,),
-            ).fetchall()
-            if not rows:
-                raise KeyError(f"unknown action: {action!r}")
-        else:
-            rows = conn.execute(
-                "select action, enabled, default_enabled, description "
-                "from tune_allows order by action"
-            ).fetchall()
-
-        changes = []
-        for r in rows:
-            if r["enabled"] == r["default_enabled"]:
-                continue
-            conn.execute(
-                "update tune_allows set enabled = ? where action = ?",
-                (r["default_enabled"], r["action"]),
-            )
-            changes.append({
-                "action": r["action"],
-                "old": r["enabled"],
-                "new": r["default_enabled"],
-                "description": r["description"],
-            })
-        conn.commit()
-
-    return changes
+    """True if ALLOWS.<action> is '1'."""
+    return get_setting("ALLOWS", action, db_path) == "1"
 
 def record_backup(
     database: str,

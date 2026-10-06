@@ -1,12 +1,29 @@
-insert into tune_allows
-    (action, enabled, default_enabled, description) values
-    ('backup',                  1, 1, 'Snapshot the target database with pg_dump | zstd'),
-    ('restore',                 0, 0, 'Drop and restore from a tune_backups entry (DESTRUCTIVE)'),
-    ('set_session_guc',         0, 0, 'SET LOCAL in a rolled-back transaction'),
-    ('analyze',                 0, 0, 'ANALYZE on a table'),
-    ('create_index',            0, 0, 'CREATE INDEX (blocking)'),
-    ('create_index_concurrent', 0, 0, 'CREATE INDEX CONCURRENTLY'),
-    ('drop_own_objects',        0, 0, 'DROP objects created by pg-tune');
+insert or ignore into tune_settings
+    (category, name, value, default_value, desc) values
+
+    -- ALLOWS: gating write actions
+    ('ALLOWS', 'backup',                  '1', '1',
+     'Snapshot the target database with pg_dump | zstd'),
+    ('ALLOWS', 'restore',                 '0', '0',
+     'Drop and restore from a tune_backups entry (DESTRUCTIVE)'),
+    ('ALLOWS', 'set_session_guc',         '0', '0',
+     'SET LOCAL in a rolled-back transaction'),
+    ('ALLOWS', 'analyze',                 '0', '0',
+     'ANALYZE on a table'),
+    ('ALLOWS', 'create_index',            '0', '0',
+     'CREATE INDEX (blocking)'),
+    ('ALLOWS', 'create_index_concurrent', '0', '0',
+     'CREATE INDEX CONCURRENTLY'),
+    ('ALLOWS', 'drop_own_objects',        '0', '0',
+     'DROP objects created by pg-tune'),
+
+    -- SETTING: tune() defaults
+    ('SETTING', 'default_cold_run',  '3',    '3',
+     'warm-up runs before measuring, to fill the buffer cache'),
+    ('SETTING', 'default_max_iters', '30',    '30',
+     'maximum fix-apply-verify iterations'),
+    ('SETTING', 'default_dry_run',   'true', 'true',
+     'tune() proposes fixes but does not apply them');
 
 insert into tune_vec_params (name, desc, measure, scope, raw_key) values
     ('ela_time',              'elapsed time',         'ms',     'root_meta', 'Execution Time'),

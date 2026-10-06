@@ -6,6 +6,7 @@ import os
 import sys
 
 from pg_tune.backup import BackupError, make_backup
+from pg_tune.config import reset_setting, set_setting
 from pg_tune.restore import RestoreError, do_restore, inspect_restore
 
 
@@ -33,6 +34,48 @@ def _print_allows(db_path) -> None:
             f"{r['action']:<26}  {state:<10}  {default:<10}  "
             f"{r['description']}"
         )
+
+def _print_settings(category: str, db_path) -> None:
+    from itertools import groupby
+
+    from pg_tune.config import list_settings
+
+    rows = list_settings(category, db_path)
+    if not rows:
+        print("No settings registered.")
+        return
+
+    rows.sort(key=lambda r: (r["category"], r["name"]))
+    for cat, group in groupby(rows, key=lambda r: r["category"]):
+        print(f"{cat}:")
+
+        if cat == "ALLOWS":
+            print(
+                f"  {'action':<26}  {'state':<10}  "
+                f"{'default':<10}  description"
+            )
+            for r in group:
+                state = "enabled" if r["value"] == "1" else "disabled"
+                default = (
+                    "enabled" if r["default_value"] == "1"
+                    else "disabled"
+                )
+                print(
+                    f"  {r['name']:<26}  {state:<10}  "
+                    f"{default:<10}  {r['desc']}"
+                )
+        else:
+            print(
+                f"  {'name':<26}  {'value':<8}  "
+                f"{'default':<8}  description"
+            )
+            for r in group:
+                mark = " *" if r["value"] != r["default_value"] else ""
+                print(
+                    f"  {r['name']:<26}  {r['value'] + mark:<8}  "
+                    f"{r['default_value']:<8}  {r['desc']}"
+                )
+        print()
 
 def _print_vec_params(db_path) -> None:
     from pg_tune.config import list_vec_params
@@ -191,91 +234,107 @@ def config_main(argv: list[str] | None = None) -> int:
     )
     g.add_argument(
         "--show",
-        action="store_true",
-        help="Print everything: allow-list and vector parameters.",
-    )
-    g.add_argument(
-        "--show-allows",
-        action="store_true",
-        help="Print the tune_allows table only.",
+        nargs="?",
+        const="",
+        metavar="CATEGORY",
+        help=(
+            "Print settings. Optionally filter by category "
+            "(ALLOWS or SETTING)."
+        ),
     )
     g.add_argument(
         "--show-params",
         action="store_true",
-        help="Print the tune_vec_params table only.",
+        help="Print tune_vec_params only.",
+    )
+    g.add_argument(
+        "--set",
+        nargs=3,
+        metavar=("CATEGORY", "NAME", "VALUE"),
+        help="Set one value: --set SETTING default_cold_run 5",
     )
     g.add_argument(
         "--allow",
         metavar="ACTION",
-        help="Enable a write action (e.g. restore).",
+        help="Sugar for --set ALLOWS <ACTION> 1.",
     )
     g.add_argument(
         "--deny",
         metavar="ACTION",
-        help="Disable a write action.",
+        help="Sugar for --set ALLOWS <ACTION> 0.",
     )
     g.add_argument(
         "--reset",
-        nargs="?",
-        const="",
-        metavar="ACTION",
+        nargs="+",
+        metavar="CATEGORY [NAME]",
         help=(
-            "Reset one action (or all if ACTION is omitted) to its "
-            "seed default."
+            "Reset one category, or one row. "
+            "Category is required; use --reset-all for everything."
         ),
+    )
+    g.add_argument(
+        "--reset-all",
+        action="store_true",
+        help="Reset every setting to its seed default.",
     )
     args = p.parse_args(argv)
 
     from pg_tune.config import (
         DEFAULT_DB,
         init_db,
-        reset_allow,
-        set_allow,
     )
 
     if args.init:
         init_db(DEFAULT_DB)
         return 0
 
-    if args.show:
-        print("tune_allows:")
-        print()
-        _print_allows(DEFAULT_DB)
-        print()
-        print("tune_vec_params:")
-        print()
-        _print_vec_params(DEFAULT_DB)
-        return 0
-
-    if args.show_allows:
-        _print_allows(DEFAULT_DB)
+    if args.show is not None:
+        _print_settings(args.show, DEFAULT_DB)
         return 0
 
     if args.show_params:
         _print_vec_params(DEFAULT_DB)
         return 0
 
-    if args.allow:
+    if args.set:
+        category, name, value = args.set
         try:
-            r = set_allow(args.allow, True, DEFAULT_DB)
+            r = set_setting(category, name, value, DEFAULT_DB)
         except KeyError as e:
             print(f"error: {e}", file=sys.stderr)
             return 1
-        print(f"{r['action']}: enabled")
+        print(f"{r['category']}.{r['name']}: {r['old']} → {r['new']}")
+        return 0
+
+    if args.allow:
+        try:
+            set_setting("ALLOWS", args.allow, "1", DEFAULT_DB)
+        except KeyError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
+        print(f"{args.allow}: enabled")
         return 0
 
     if args.deny:
         try:
-            r = set_allow(args.deny, False, DEFAULT_DB)
+            set_setting("ALLOWS", args.deny, "0", DEFAULT_DB)
         except KeyError as e:
             print(f"error: {e}", file=sys.stderr)
             return 1
-        print(f"{r['action']}: disabled")
+        print(f"{args.deny}: disabled")
         return 0
 
-    if args.reset is not None:
+    if args.reset:
+        if len(args.reset) > 2:
+            print(
+                "error: --reset takes CATEGORY and optional NAME",
+                file=sys.stderr,
+            )
+            return 1
+        category = args.reset[0]
+        name = args.reset[1] if len(args.reset) == 2 else ""
         try:
-            changes = reset_allow(args.reset, DEFAULT_DB)
+            changes = reset_setting(category, name, DEFAULT_DB)
         except KeyError as e:
             print(f"error: {e}", file=sys.stderr)
             return 1
@@ -283,9 +342,16 @@ def config_main(argv: list[str] | None = None) -> int:
             print("Already at defaults.")
             return 0
         for c in changes:
-            old = "enabled" if c["old"] else "disabled"
-            new = "enabled" if c["new"] else "disabled"
-            print(f"{c['action']}: {old} → {new}")
+            print(f"{c['category']}.{c['name']}: {c['old']} → {c['new']}")
+        return 0
+
+    if args.reset_all:
+        changes = reset_setting("", "", DEFAULT_DB)
+        if not changes:
+            print("Already at defaults.")
+            return 0
+        for c in changes:
+            print(f"{c['category']}.{c['name']}: {c['old']} → {c['new']}")
         return 0
 
     return 0

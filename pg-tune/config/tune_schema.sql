@@ -20,13 +20,14 @@ create table tune_backups (
     restored_by        text
 );
 
-create table tune_allows (
-    action       text primary key,     -- 'create_index', 'set_guc', 'analyze', ...
-    enabled      integer not null default 0
-                 check (enabled in (0, 1)),
-    default_enabled  integer not null default 0
-                     check (default_enabled in (0, 1)),
-    description  text not null
+create table if not exists tune_settings (
+    category       text    not null
+                   check (category in ('ALLOWS', 'SETTING')),
+    name           text    not null,
+    value          text    not null,
+    default_value  text    not null,
+    desc           text    not null,
+    primary key (category, name)
 );
 
 -- ---------------------------------------------------------------------------

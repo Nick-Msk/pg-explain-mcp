@@ -11,7 +11,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from pg_tune.backup import BackupError, make_backup
-from pg_tune.config import BACKUP_DIR
+from pg_tune.config import BACKUP_DIR, set_setting
 from pg_tune.restore import RestoreError, do_restore, inspect_restore
 
 mcp = FastMCP("pg-tune")
@@ -254,9 +254,8 @@ def list_allows() -> str:
     be turned on explicitly with `set_allow` (or the CLI).
     """
     from pg_tune.config import DEFAULT_DB
-    from pg_tune.config import list_allows as _list
 
-    rows = _list(DEFAULT_DB)
+    rows = list_settings("ALLOWS", DEFAULT_DB)
     if not rows:
         return "No actions registered."
 
@@ -290,19 +289,39 @@ def set_allow(action: str, enabled: bool) -> str:
     Use ``list_allows()`` to see the full list of action names.
     """
     from pg_tune.config import DEFAULT_DB
-    from pg_tune.config import set_allow as _set
 
     try:
-        result = _set(action, enabled, DEFAULT_DB)
+        r = set_setting(
+            "ALLOWS", action, "1" if enabled else "0", DEFAULT_DB
+        )
     except KeyError as e:
         return f"Error: {e}. Call list_allows() to see valid names."
+    old = "enabled" if r["old"] == "1" else "disabled"
+    new = "enabled" if r["new"] == "1" else "disabled"
+    return f"{r['name']}: {old} → {new}\n  {r['desc']}"
 
-    old = "enabled" if result["old"] else "disabled"
-    new = "enabled" if result["new"] else "disabled"
-    return (
-        f"{result['action']}: {old} → {new}\n"
-        f"  {result['description']}"
-    )
+@mcp.tool()
+def list_settings(category: str = "") -> str:
+    """Show settings by category (ALLOWS or SETTING).
+
+    Empty category returns both. Values are shown with their
+    defaults so drift is visible.
+    """
+    from pg_tune.config import DEFAULT_DB
+    from pg_tune.config import list_settings as _list
+
+    rows = _list(category, DEFAULT_DB)
+    if not rows:
+        return "No settings registered."
+
+    lines = []
+    for r in rows:
+        mark = " *" if r["value"] != r["default_value"] else ""
+        lines.append(
+            f"{r['category']:<8} {r['name']:<26} "
+            f"= {r['value']}{mark}  ({r['desc']})"
+        )
+    return "\n".join(lines)
 
 @mcp.tool()
 def status() -> str:
