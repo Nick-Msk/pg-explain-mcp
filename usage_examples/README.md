@@ -2,6 +2,14 @@
 
 Real-world runs of `pg-explain-mcp` against PostgreSQL.
 
+> **Note on `context`.** The examples in this directory were
+> captured before the `Issue.context` field was added. The `issues`
+> arrays below show `type`, `severity`, `message`, `node`, `depth`,
+> and `parent_node` — but not the structured `context` dict that a
+> current `explain` call returns. Behaviour, plans, and issue
+> messages are unchanged; the new field is additive. Fresh runs
+> will show one extra key per issue.
+
 ## test environment
 
 All examples in this directory were captured on the following setup.

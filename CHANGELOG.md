@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`Issue.context`.** Every issue now carries the check's
+  `gather_info` dict as structured context, alongside the
+  human-readable `message`. Enables downstream consumers — an
+  LLM prompt, `pg-tune` proposers — to build fixes from typed
+  fields instead of parsing prose.
+
 ## [0.5.2] — 2026-10-03
 
 ### Added

@@ -73,6 +73,37 @@ in `src/pg_explain_mcp/config.py`, and add its default parameters to
 `PARAMS = {param: type}`; values are loaded from the SQLite registry
 and coerced at construction time.
 
+### Issue context
+
+Every `Issue` carries a `context` dict alongside the human-readable
+`message` — the same values the check used to decide whether to
+fire. This lets an agent (or an automated tuning tool) build a fix
+without parsing the message text.
+
+For example, a `disk_spill_hash` issue includes:
+
+```json
+{
+  "type": "disk_spill_hash",
+  "severity": "warning",
+  "message": "Hash operation spilled to disk: 8 batches, peak 25067kB ...",
+  "context": {
+    "batches": 8,
+    "peak_kb": 25067,
+    "estimated_mb": 195.8,
+    "disk_kb": 0,
+    "parallel": false,
+    "loops": 1,
+    "node_type": "Hash"
+  }
+}
+
+A consumer reads context.estimated_mb = 195.8 and computes the
+required work_mem directly — no regex on the message.
+
+Each check declares its own context shape; the fields are the
+same ones documented in the check's gather_info docstring.
+
 ### Structured plan output
 
 `explain` returns a compact `plan_nodes` tree alongside `issues`.
