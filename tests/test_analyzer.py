@@ -10,6 +10,7 @@ from pg_explain_mcp.analyzer import (
     EstimateMismatchCheck,
     IndexOnlyScanCheck,
     IndexRegularScanCheck,
+    Issue,
     JitDecisionCheck,
     NestedLoopCheck,
     NonSargableCheck,
@@ -1581,4 +1582,60 @@ class TestFilteredParsePlan:
         node = self._parse(plan, {"Known": ("known", 1)})[0]
         assert "mystery" not in node      # 999 → dropped
         assert node["known"] == 0          # 1 → kept
+
+class TestIssueContext:
+    """Every check attaches its gather_info dict to the issue."""
+
+    def test_seq_scan_context_populated(self):
+        check = SeqScanCheck(params={
+            "threshold_rows": "1000",
+            "min_filter_ratio": "0.9",
+        })
+        node = PlanNode(depth=0, path="0:0", fields={
+            "Node Type": "Seq Scan",
+            "Actual Rows": 100,
+            "Rows Removed by Filter": 999_900,
+            "Relation Name": "big",
+        })
+        issues = check.check(node)
+        assert len(issues) == 1
+        ctx = issues[0].context
+        assert ctx["relation"] == "big"
+        assert ctx["actual"] == 100.0
+        assert ctx["removed"] == 999_900.0
+        assert ctx["total_read"] == 1_000_000.0
+
+    def test_disk_spill_sort_context(self):
+        check = DiskSpillSortCheck(params={
+            "min_spill_kb": "0",
+            "min_work_mem_mb": "32",
+            "headroom_ratio": "1.1",
+        })
+        node = PlanNode(depth=0, path="0:0", fields={
+            "Node Type": "Sort",
+            "Sort Method": "external merge",
+            "Sort Space Type": "Disk",
+            "Sort Space Used": 221208,
+        })
+        issues = check.check(node)
+        assert len(issues) == 1
+        assert issues[0].context["size_kb"] == 221208
+        assert issues[0].context["size_mb"] > 200
+
+    def test_context_survives_with_context(self):
+        """with_context must not drop the check-supplied context."""
+        issue = Issue(
+            severity="warning", type="x", message="m",
+            node="n", context={"a": 1},
+        )
+        enriched = issue.with_context(depth=3, parent_node="Root")
+        assert enriched.context == {"a": 1}
+        assert enriched.depth == 3
+
+    def test_to_dict_includes_context(self):
+        issue = Issue(
+            severity="warning", type="x", message="m",
+            node="n", context={"k": 42},
+        )
+        assert issue.to_dict()["context"] == {"k": 42}
 

@@ -32,6 +32,7 @@ class Issue:
     node: str
     depth: int = 0
     parent_node: str = ""
+    context: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -154,7 +155,12 @@ class ParsedPlanCheckBase(CheckBase):
         info = self.gather_info(node)
         if info is None or not self.validate_rule(info):
             return []
-        return self.generate_msg(info)
+        issues = self.generate_msg(info)
+        # Attach the check's own working dict as context on every
+        # issue. The same info that drove validate_rule is now
+        # available to pg-tune / the LLM as structured facts —
+        # no need to parse the human-readable message.
+        return [replace(i, context=info) for i in issues]
 
     @abstractmethod
     def gather_info(self, node: PlanNode) -> dict[str, Any] | None:
