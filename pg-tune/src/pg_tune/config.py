@@ -34,7 +34,7 @@ def _ensure_db(db_path: Path | str = DEFAULT_DB) -> None:
     # Sanity check: required tables present.
     try:
         with sqlite3.connect(db_path) as conn:
-            for table in ("tune_backups", "tune_allows", "tune_audit",
+            for table in ("tune_backups", "tune_settings", "tune_audit",
                           "tune_vec_params", "tune_audit_vector"):
                 row = conn.execute(
                     "select 1 from sqlite_master "
@@ -196,6 +196,18 @@ def is_allowed(
 ) -> bool:
     """True if ALLOWS.<action> is '1'."""
     return get_setting("ALLOWS", action, db_path) == "1"
+
+def list_vec_params(
+    db_path: Path | str = DEFAULT_DB,
+) -> list[dict[str, Any]]:
+    """Return every row of tune_vec_params, ordered by name."""
+    _ensure_db(db_path)
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "select name, desc, measure, scope, raw_key "
+            "from tune_vec_params order by name"
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 def record_backup(
     database: str,

@@ -9,6 +9,10 @@ from pg_tune.backup import BackupError, make_backup
 from pg_tune.config import reset_setting, set_setting
 from pg_tune.restore import RestoreError, do_restore, inspect_restore
 
+def _fmt_value(category: str, value: str) -> str:
+    if category == "ALLOWS":
+        return "enabled" if value == "1" else "disabled"
+    return value
 
 def _human_bytes(n: int | None) -> str:
     if not n:
@@ -239,7 +243,7 @@ def config_main(argv: list[str] | None = None) -> int:
         metavar="CATEGORY",
         help=(
             "Print settings. Optionally filter by category "
-            "(ALLOWS or SETTING)."
+            "(ALLOWS or SETTINGS)."
         ),
     )
     g.add_argument(
@@ -251,7 +255,7 @@ def config_main(argv: list[str] | None = None) -> int:
         "--set",
         nargs=3,
         metavar=("CATEGORY", "NAME", "VALUE"),
-        help="Set one value: --set SETTING default_cold_run 5",
+        help="Set one value: --set SETTINGS default_cold_run 5",
     )
     g.add_argument(
         "--allow",
@@ -300,28 +304,30 @@ def config_main(argv: list[str] | None = None) -> int:
         category, name, value = args.set
         try:
             r = set_setting(category, name, value, DEFAULT_DB)
+            old = _fmt_value(r["category"], r["old"])
+            new = _fmt_value(r["category"], r["new"])
         except KeyError as e:
             print(f"error: {e}", file=sys.stderr)
             return 1
-        print(f"{r['category']}.{r['name']}: {r['old']} → {r['new']}")
+        print(f"{r['category']}.{r['name']}: {old} → {new}")
         return 0
 
     if args.allow:
         try:
-            set_setting("ALLOWS", args.allow, "1", DEFAULT_DB)
+            r = set_setting("ALLOWS", args.allow, "1", DEFAULT_DB)
         except KeyError as e:
             print(f"error: {e}", file=sys.stderr)
             return 1
-        print(f"{args.allow}: enabled")
+        print(f"{r['name']}: enabled")
         return 0
 
     if args.deny:
         try:
-            set_setting("ALLOWS", args.deny, "0", DEFAULT_DB)
+            r = set_setting("ALLOWS", args.deny, "0", DEFAULT_DB)
         except KeyError as e:
             print(f"error: {e}", file=sys.stderr)
             return 1
-        print(f"{args.deny}: disabled")
+        print(f"{r['name']}: disabled")
         return 0
 
     if args.reset:
@@ -342,7 +348,9 @@ def config_main(argv: list[str] | None = None) -> int:
             print("Already at defaults.")
             return 0
         for c in changes:
-            print(f"{c['category']}.{c['name']}: {c['old']} → {c['new']}")
+            old = _fmt_value(c["category"], c["old"])
+            new = _fmt_value(c["category"], c["new"])
+            print(f"{c['category']}.{c['name']}: {old} → {new}")
         return 0
 
     if args.reset_all:
@@ -351,7 +359,9 @@ def config_main(argv: list[str] | None = None) -> int:
             print("Already at defaults.")
             return 0
         for c in changes:
-            print(f"{c['category']}.{c['name']}: {c['old']} → {c['new']}")
+            old = _fmt_value(c["category"], c["old"])
+            new = _fmt_value(c["category"], c["new"])
+            print(f"{c['category']}.{c['name']}: {old} → {new}")
         return 0
 
     return 0

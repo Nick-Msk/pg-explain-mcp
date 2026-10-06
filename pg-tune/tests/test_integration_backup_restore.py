@@ -21,7 +21,7 @@ from pathlib import Path
 import psycopg
 import pytest
 from pg_tune.backup import make_backup
-from pg_tune.config import set_allow
+from pg_tune.config import set_setting
 from pg_tune.restore import RestoreError, do_restore, inspect_restore
 
 pytestmark = [
@@ -127,10 +127,9 @@ def allow_writes(monkeypatch):
 
 @pytest.fixture
 def allow_restore(tune_db):
-    """Enable the `restore` action in tune_allows."""
-    set_allow("restore", True, tune_db)
+    """Enable the `restore` action in tune_settings."""
+    set_setting("ALLOWS", "restore", "1", tune_db)
     return tune_db
-
 
 # ---------------------------------------------------------------------------
 # The full cycle

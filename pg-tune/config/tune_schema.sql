@@ -22,7 +22,7 @@ create table tune_backups (
 
 create table if not exists tune_settings (
     category       text    not null
-                   check (category in ('ALLOWS', 'SETTING')),
+                   check (category in ('ALLOWS', 'SETTINGS')),
     name           text    not null,
     value          text    not null,
     default_value  text    not null,

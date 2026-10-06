@@ -17,12 +17,12 @@ insert or ignore into tune_settings
     ('ALLOWS', 'drop_own_objects',        '0', '0',
      'DROP objects created by pg-tune'),
 
-    -- SETTING: tune() defaults
-    ('SETTING', 'default_cold_run',  '3',    '3',
+    -- SETTINGS: tune() defaults
+    ('SETTINGS', 'default_cold_run',  '3',    '3',
      'warm-up runs before measuring, to fill the buffer cache'),
-    ('SETTING', 'default_max_iters', '30',    '30',
+    ('SETTINGS', 'default_max_iters', '30',    '30',
      'maximum fix-apply-verify iterations'),
-    ('SETTING', 'default_dry_run',   'true', 'true',
+    ('SETTINGS', 'default_dry_run',   'true', 'true',
      'tune() proposes fixes but does not apply them');
 
 insert into tune_vec_params (name, desc, measure, scope, raw_key) values
