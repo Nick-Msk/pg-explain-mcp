@@ -5,6 +5,7 @@
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![MCP](https://img.shields.io/badge/MCP-compatible-purple)
 ![SQL lint](https://img.shields.io/badge/sql%20lint-sqlfluff-blue)
+[![CI](https://github.com/Nick-Msk/pg-explain-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/Nick-Msk/pg-explain-mcp/actions/workflows/ci.yml)
 
 An MCP (Model Context Protocol) server for analyzing PostgreSQL query
 execution plans. Built as a bridge between LLM-based coding assistants
