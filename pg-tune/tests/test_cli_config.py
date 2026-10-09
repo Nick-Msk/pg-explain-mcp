@@ -1,7 +1,6 @@
 """Tests for the pg-tune-config CLI."""
 
 import pytest
-
 from pg_tune.cli import config_main
 
 

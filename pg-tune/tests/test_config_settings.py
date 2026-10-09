@@ -1,7 +1,6 @@
 """Tests for tune_settings CRUD API."""
 
 import pytest
-
 from pg_tune.config import (
     get_setting,
     init_db,
@@ -10,7 +9,6 @@ from pg_tune.config import (
     reset_setting,
     set_setting,
 )
-
 
 ALLOW_NAMES = {
     "backup",
