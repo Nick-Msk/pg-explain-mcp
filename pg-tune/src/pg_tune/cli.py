@@ -9,6 +9,7 @@ from pg_tune.backup import BackupError, make_backup
 from pg_tune.config import reset_setting, set_setting
 from pg_tune.restore import RestoreError, do_restore, inspect_restore
 
+
 def _fmt_value(category: str, value: str) -> str:
     if category == "ALLOWS":
         return "enabled" if value == "1" else "disabled"
