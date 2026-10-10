@@ -254,7 +254,7 @@ pytest tests/test_integration_backup_restore.py -v  #full parama
 
 ## Requirements
 
-- PostgreSQL 14 or newer. CI tests against 15, 16, and 17.
+- PostgreSQL 14 or newer. CI tests against 15, 16, 17 and 18.
   PostgreSQL 14 reaches end-of-life in November 2026; support is
   best-effort until then and will be dropped after.
 - `pg_dump` and `pg_restore` on `PATH`. Version matching the
