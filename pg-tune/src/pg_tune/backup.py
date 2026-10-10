@@ -50,21 +50,29 @@ def _is_zstd_unsupported(stderr: str) -> bool:
         return False
     return "not supported" in low or "unsupported" in low
 
-def _pg_server_version(database: str) -> str:
-    """Return `SHOW server_version` for the target database.
+def _pg_server_version(database: str) -> tuple[str, int]:
+    """Return (display, num) for the server version.
 
-    Uses psycopg with an explicit dbname so it does not depend on
-    PGDATABASE or the OS user name.
+    display: "18.6"
+    num:     180006 for 18.6, 150004 for 15.4.
     """
     import psycopg
+
     try:
         with psycopg.connect(dbname=database, autocommit=True) as conn:
             with conn.cursor() as cur:
-                cur.execute("show server_version")
+                cur.execute(
+                    "select current_setting('server_version'), "
+                    "current_setting('server_version_num')"
+                )
                 row = cur.fetchone()
     except psycopg.Error as e:
         raise BackupError(f"cannot query server version: {e}") from e
-    return row[0] if row else "unknown"
+
+    if row is None:
+        raise BackupError("server did not return version settings")
+
+    return row[0], int(row[1])
 
 def _pg_explain_version() -> str:
     try:
