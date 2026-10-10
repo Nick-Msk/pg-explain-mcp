@@ -246,6 +246,22 @@ cd pg-tune
 pytest -v                                  # offline suite, ~1s
 PG_TEST_INTEGRATION=1 pytest -v            # + live-PostgreSQL tests
 
+PG_TEST_INTEGRATION=1 \
+PGHOST=localhost \
+PGUSER=<name> \
+PGDATABASE=tunetest1 \
+pytest tests/test_integration_backup_restore.py -v  #full parama
+
+## Requirements
+
+- PostgreSQL 14 or newer. CI tests against 15, 16, and 17.
+  PostgreSQL 14 reaches end-of-life in November 2026; support is
+  best-effort until then and will be dropped after.
+- `pg_dump` and `pg_restore` on `PATH`. Version matching the
+  server is recommended but not required — zstd compression in
+  `pg_dump` requires the client to be built with `--with-zstd`,
+  and `pg-tune` falls back to gzip automatically if it is not.
+
 ## Roadmap
 
 - **Apply fixes.** The allow-list already gates `set_session_guc`,
