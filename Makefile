@@ -27,9 +27,8 @@ lint:  ## ruff over both projects
 	$(UV) run ruff check src tests
 	cd pg-tune && $(UV) run ruff check src tests
 
-test:  ## all unit tests, both projects
-	$(UV) run pytest tests -v
-	cd pg-tune && $(UV) run pytest -v
+test: test-explain test-tune-all  ## all tests, both projects
+	@echo "All tests passed."
 
 test-explain:  ## pg-explain-mcp unit tests only
 	$(UV) run pytest tests -v
