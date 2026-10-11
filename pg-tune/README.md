@@ -1,6 +1,6 @@
 # pg-tune
 
-A **write-capable** tuning companion to
+`pg-tune` is a **write-capable** companion to
 [`pg-explain-mcp`](../). It reuses the same analyzer and check
 catalogue, but unlike the read-only server it can apply
 recommendations — session GUCs, `ANALYZE`, indexes — and re-measure
@@ -11,6 +11,12 @@ separate MCP server (`pg-tune-mcp`) with its own SQLite config
 (`config/tune.db`) and its own safety model. The split exists because
 the two servers have different access requirements: one is
 read-only by design, the other must write.
+
+The two packages share a single
+[uv workspace](https://docs.astral.sh/uv/concepts/workspaces/),
+one `.venv`, and one `uv.lock`. `pg-tune` resolves `pg-explain-mcp`
+from the workspace, not from PyPI. See the root repository's
+`## Development` section for build and test commands.
 
 > ⚠️ **Dev and test only.** See [DISCLAIMER.md](DISCLAIMER.md).
 > Never point `pg-tune-mcp` at a production database.
@@ -97,9 +103,20 @@ Report:
 `pg-tune` reads a small SQLite database at `config/tune.db`,
 independent of `checks.db` used by `pg-explain-mcp`.
 
-### `tune_allows`
+### Settings
 
-Which write actions are permitted. Defaults on a fresh install:
+All runtime configuration lives in one table, `tune_settings`,
+with two categories:
+
+| Category   | What it holds                                          |
+|------------|--------------------------------------------------------|
+| `ALLOWS`   | Which write actions pg-tune may perform                |
+| `SETTINGS` | Defaults for `tune()` — warm-up, iterations, dry-run   |
+
+Every row carries `value` and `default_value` as text. `reset`
+returns `value` to `default_value`; a fresh install has them equal.
+
+#### `ALLOWS` — write actions
 
 | Action                    | Default | What it does                            |
 |---------------------------|---------|-----------------------------------------|
@@ -111,11 +128,57 @@ Which write actions are permitted. Defaults on a fresh install:
 | `create_index_concurrent` | off     | `CREATE INDEX CONCURRENTLY`             |
 | `drop_own_objects`        | off     | `DROP` objects pg-tune created earlier  |
 
-Each row carries `enabled` and `default_enabled`. The second one
-is what `reset` returns to — it never changes after `--init`, so
-"reset to factory" always has a defined target.
+Only `backup` is enabled on a fresh install. Everything else must
+be turned on explicitly, per action.
 
-**Via CLI:**
+Backup files use **zstd** compression on `pg_dump` builds that
+support it, and **gzip** otherwise. The choice is automatic:
+`pg-tune` tries zstd first and falls back to gzip only when the
+binary explicitly rejects it. The file extension reflects what was
+used (`.dump.zstd` or `.dump.gz`); both are standard custom-format
+archives that `pg_restore` reads transparently.
+
+#### `SETTINGS` — tune() defaults
+
+| Name                | Default | Meaning                              |
+|---------------------|---------|--------------------------------------|
+| `default_cold_run`  | `3`     | Warm-up runs before measuring        |
+| `default_max_iters` | `3`     | Max fix-apply-verify iterations      |
+| `default_dry_run`   | `true`  | Propose fixes but do not apply them  |
+
+#### Via CLI
+
+```bash
+pg-tune-config --init                   # create tune.db from schema + seed
+pg-tune-config --show                   # everything
+pg-tune-config --show ALLOWS            # one category
+pg-tune-config --show SETTINGS
+
+pg-tune-config --allow restore          # enable an action
+pg-tune-config --deny  restore          # disable an action
+pg-tune-config --set SETTINGS default_cold_run 5
+pg-tune-config --set ALLOWS restore 1
+
+pg-tune-config --reset ALLOWS restore   # one row back to default
+pg-tune-config --reset ALLOWS           # whole category
+pg-tune-config --reset-all              # every row
+```
+
+`--allow` / `--deny` are sugar for `--set ALLOWS <name> 1|0`.
+`--reset` without a category is an error — use `--reset-all` when
+you really mean "reset everything".
+
+#### Via MCP
+
+```
+list_allows()                    # show every ALLOWS row and state
+list_settings("SETTINGS")        # show SETTINGS rows
+set_allow("restore", True)       # enable an action
+```
+
+Enabling an action is security-relevant — it grants the LLM the
+ability to perform that write. Confirm with the user before calling
+`set_allow(..., True)`. Disabling is always safe.
 
 ### `pg-tune-config`
 
@@ -149,28 +212,28 @@ Metrics recorded alongside every run are declared in
 `tune_vec_params`. Each row names a metric, its unit, where it is
 read from, and the raw EXPLAIN key:
 
-| Column    | Meaning                                                     |
-|-----------|-------------------------------------------------------------|
-| `name`    | metric id, used as the key in `tune_audit_vector.vec_name`  |
-| `desc`    | human-readable description                                  |
-| `measure` | unit — `ms`, `blocks`, …                                    |
-| `scope`   | `root_meta` or `root_plan` — where the value lives          |
-| `raw_key` | field name inside that scope                                |
+| Column    | Meaning                                                    |
+|-----------|------------------------------------------------------------|
+| `name`    | metric id, used as `tune_audit_vector.vec_name`            |
+| `desc`    | human-readable description                                 |
+| `measure` | unit — `ms`, `blocks`, …                                   |
+| `scope`   | `root_meta` or `root_plan` — where the value lives         |
+| `raw_key` | field name inside that scope                               |
 
-Fresh install ships seven metrics:
+A fresh install ships seven metrics:
 
-| name                    | scope       | raw_key              | measure |
-|-------------------------|-------------|----------------------|---------|
-| `ela_time`              | `root_meta` | `Execution Time`     | ms      |
-| `shared_hit_blocks`     | `root_plan` | `Shared Hit Blocks`  | blocks  |
-| `shared_read_blocks`    | `root_plan` | `Shared Read Blocks` | blocks  |
-| `temp_read_blocks`      | `root_plan` | `Temp Read Blocks`   | blocks  |
-| `temp_written_blocks`   | `root_plan` | `Temp Written Blocks`| blocks  |
-| `shared_i_o_read_time`  | `root_plan` | `Shared I/O Read Time` | ms    |
-| `temp_i_o_write_time`   | `root_plan` | `Temp I/O Write Time` | ms     |
+| name                    | scope       | raw_key                 | measure |
+|-------------------------|-------------|-------------------------|---------|
+| `ela_time`              | `root_meta` | `Execution Time`        | ms      |
+| `shared_hit_blocks`     | `root_plan` | `Shared Hit Blocks`     | blocks  |
+| `shared_read_blocks`    | `root_plan` | `Shared Read Blocks`    | blocks  |
+| `temp_read_blocks`      | `root_plan` | `Temp Read Blocks`      | blocks  |
+| `temp_written_blocks`   | `root_plan` | `Temp Written Blocks`   | blocks  |
+| `shared_i_o_read_time`  | `root_plan` | `Shared I/O Read Time`  | ms      |
+| `temp_i_o_write_time`   | `root_plan` | `Temp I/O Write Time`   | ms      |
 
-`scope` and `raw_key` are the whole point: adding a new metric is
-a single `INSERT`, no code change. `pg_tune.vector.extract_vector`
+`scope` and `raw_key` are the whole point: adding a metric is a
+single `INSERT`, no code change. `pg_tune.vector.extract_vector`
 reads whatever `tune_vec_params` declares, in one pass over the
 plan JSON, no additional database queries.
 
@@ -185,9 +248,10 @@ To add a metric:
 sqlite3 config/tune.db \
   "insert into tune_vec_params (name, desc, measure, scope, raw_key)
    values ('wal_bytes', 'WAL bytes generated', 'bytes',
-           'root_plan', 'WAL Bytes');"```
+           'root_plan', 'WAL Bytes');"
+```
 
-The next pg-tune status / tune run picks it up automatically.
+The next `tune()` run picks it up automatically.
 
 ## Safety model
 
