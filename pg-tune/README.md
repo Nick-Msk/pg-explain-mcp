@@ -44,7 +44,7 @@ cycle:
    (`elapsed_ms`, disk read bytes, temp written bytes, …) recorded
    for later comparison.
 4. **Issues → apply fixes.** For each issue, look up a fix in
-   `tune_allows`. If the corresponding action is enabled, apply it
+   `tune_settings`. If the corresponding action is enabled, apply it
    and re-run `explain`. Which fixes to apply and in what order is
    the user's call — `pg-tune` suggests an ordering by risk (session
    GUC → `ANALYZE` → index) but does not enforce it.
@@ -184,7 +184,7 @@ ability to perform that write. Confirm with the user before calling
 
 ```bash
 pg-tune-config --init                 # rebuild tune.db from schema + seed
-pg-tune-config --show                 # print tune_allows + tune_vec_params
+pg-tune-config --show                 # print tune_settings + tune_vec_params
 pg-tune-config --show-allows          # only the allow-list
 pg-tune-config --show-params          # only the metric registry
 
@@ -262,8 +262,8 @@ Three layers, in order of precedence:
 2. **Host blacklist.** The startup check refuses to run against
    hosts matching any pattern in `tune_blacklist` (`prod`,
    `*.prod.internal`, …). Edit the table directly.
-3. **`tune_allows`.** Even with both of the above in place, no
-   action runs unless its row in `tune_allows` has `enabled = 1`.
+3. **`tune_settings`.** Even with both of the above in place, no
+   action runs unless its row in `tune_settings` has `enabled = 1`.
 
 Destructive tools (`restore`, and later `DROP` of managed objects)
 require an explicit `confirm=True` argument on the MCP call. That
@@ -332,7 +332,7 @@ pytest tests/test_integration_backup_restore.py -v  #full parama
   `analyze`, `create_index`, and `drop_own_objects`, but only
   `backup` and `restore` are wired to tools. The tuning loop
   (diagnose → fix → re-measure) lands next.
-- **Audit for `tune_allows` changes.** Every flip of an enable
+- **Audit for `tune_settings` changes.** Every flip of an enable
   switch should land in `tune_audit`, so a rogue `set_allow`
   in the middle of the night is visible afterwards.
 - **`tune_blacklist` enforcement.** The safety model mentions a

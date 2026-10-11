@@ -13,6 +13,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `tune_settings` table (replaces `tune_allows`), with `ALLOWS`
+  and `SETTINGS` categories.
+- `tune_vec_params.scope` and `.raw_key` — metric registry is
+  now data-driven.
+- `pg-tune-config`: `--show CAT`, `--set CAT NAME VALUE`,
+  `--reset CAT [NAME]`, `--reset-all`.
+- MCP tools `list_backups`, `status`, `list_settings`.
+- zstd → gzip fallback in `make_backup`.
+- `Makefile` targets `sync`, `test-*`, `docker-test-*`.
+
+### Changed
+
+- `tune_allows` merged into `tune_settings`.
+- `license` metadata uses SPDX strings (PEP 639).
+- Test sandbox moved to `tests/test_tune.db` + `tests/test_backups/`.
+
+### Added
+
 - **`tune_vec_params` registry.** Metrics for `tune_audit_vector`
   are now declared in SQLite, not hardcoded. Each row carries
   `name`, `desc`, `measure`, `scope`, and `raw_key`. Fresh install

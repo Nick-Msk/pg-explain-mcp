@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`pg-tune`: `tune_allows` merged into `tune_settings`.**
+  The table now carries a `category` column (`ALLOWS` for write
+  permissions, `SETTINGS` for `tune()` defaults). One API —
+  `list_settings`, `get_setting`, `set_setting`, `reset_setting`.
+  CLI: `--show CAT`, `--set`, `--reset CAT [NAME]`, `--reset-all`.
+
+- **`pg-tune`: `tune_vec_params` gained `scope` and `raw_key`.**
+  The metric-to-source mapping is now data, not code.
+
 ### Added
 
 - **`Issue.context`.** Every issue now carries the check's
