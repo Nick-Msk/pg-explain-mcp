@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`pg-tune`: `tune_vec_params` gained `scope` and `raw_key`.**
   The metric-to-source mapping is now data, not code.
 
+- **Integration tests use TCP, not Unix sockets.** `psql` and the
+  `libpq` used by `psycopg[binary]` may come from different builds
+  with different compile-time socket directories. `make
+  test-tune-integration` now defaults `PGHOST` to `localhost` so
+  every client agrees on the transport. Root README explains the
+  `pg_hba.conf` line required for loopback TCP.
+
 ### Added
 
 - **`Issue.context`.** Every issue now carries the check's

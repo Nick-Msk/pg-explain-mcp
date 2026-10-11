@@ -554,6 +554,66 @@ separately; `uv sync --all-packages` installs both at once. The
 `Issue` from `pg-explain-mcp`. Keeping the two in one repository and
 one workspace is deliberate.
 
+### Integration tests require TCP
+
+Integration tests (`make test-tune-integration`, `make
+docker-test-tune-integration`) connect to PostgreSQL over **TCP**
+(`PGHOST=localhost` by default), not over a Unix socket. This is
+deliberate.
+
+`psql` and the libpq used by `psycopg` may come from **different
+builds** with **different compile-time defaults** for the socket
+directory. On Debian, for example, `psql` from a hand-built
+PostgreSQL 18 knows the socket is in `/tmp`, while the system
+`libpq` that `psycopg[binary]` links against looks in
+`/var/run/postgresql`. Same server, same user, one client
+connects, the other reports "no such file or directory".
+
+TCP sidesteps this entirely: `localhost:5432` is unambiguous, and
+every client agrees on what it means.
+
+#### Configuring `pg_hba.conf`
+
+For the tests to reach the server over TCP, the target cluster
+must accept loopback connections. A minimal line in `pg_hba.conf`:
+
+```
+# TYPE  DATABASE  USER    ADDRESS       METHOD
+host    all       all     127.0.0.1/32  scram-sha-256
+host    all       all     ::1/128       scram-sha-256
+```
+
+(or `trust` on a disposable dev machine — your call).
+
+Reload after editing:
+
+```bash
+pg_ctl -D /path/to/data reload
+# or, for systemd installs
+sudo systemctl reload postgresql
+```
+
+Verify from the shell before running the suite:
+
+```bash
+psql -h localhost -U $PGUSER -d $PGDATABASE -c "select 1"
+```
+
+If that works, `make test-tune-integration` will too.
+
+#### If you really want a Unix socket
+
+You can override the default:
+
+```bash
+PGHOST=/tmp make test-tune-integration
+```
+
+But you are then responsible for pointing `PGHOST` at whichever
+path **the client's libpq** expects, which may not be the same
+directory `psql` reports via `show unix_socket_directories`.
+That is exactly the ambiguity TCP avoids.
+
 ### Prerequisites
 
 - **uv** — `brew install uv` (macOS) or see

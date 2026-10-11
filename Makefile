@@ -38,6 +38,8 @@ test-tune:  ## pg-tune unit tests only
 
 test-tune-integration:  ## pg-tune integration tests against $PGHOST (live DB)
 	cd pg-tune && \
+		PGHOST=$${PGHOST:-localhost} \
+		PGPORT=$${PGPORT:-5432} \
 	 	PGDATABASE=$${PGDATABASE:-tunetest1} PG_TEST_INTEGRATION=1 \
 		$(UV) run pytest \
 	    	tests/test_integration_backup_restore.py -v
