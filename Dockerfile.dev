@@ -1,0 +1,53 @@
+# pg-tune — Python 3.12 + PostgreSQL 18 client tools
+#
+# The image contains pg_dump / pg_restore from PGDG (18.x), so
+# zstd compression is available out of the box. The Python side
+# has both pg-explain-mcp and pg-tune installed from source.
+
+FROM python:3.12-slim-bookworm
+
+# ---- PostgreSQL 18 client from PGDG -------------------------------
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      ca-certificates curl gnupg \
+ && install -d /usr/share/postgresql-common/pgdg \
+ && curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+      https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+ && . /etc/os-release \
+ && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] \
+      http://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" \
+      > /etc/apt/sources.list.d/pgdg.list \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends postgresql-client-18 \
+ && apt-get purge -y --auto-remove curl gnupg \
+ && rm -rf /var/lib/apt/lists/*
+
+# ---- Application --------------------------------------------------
+WORKDIR /app/pg-tune
+
+# Bring in both projects. Copy pyproject/src before README to keep
+# the cache layer valid when only docs change.
+COPY pyproject.toml /app/pyproject.toml
+COPY src/ /app/src/
+COPY README.md /app/README.md
+COPY config/schema.sql config/seed.sql /app/config/
+
+COPY pg-tune/pyproject.toml /app/pg-tune/pyproject.toml
+COPY pg-tune/src/ /app/pg-tune/src/
+COPY pg-tune/README.md /app/pg-tune/README.md
+COPY pg-tune/tests/ /app/pg-tune/tests/
+COPY pg-tune/config/tune_schema.sql pg-tune/config/tune_seed.sql \
+     /app/pg-tune/config/
+COPY tests/ /app/tests
+
+RUN pip install --no-cache-dir -e /app \
+ && pip install --no-cache-dir -e /app/pg-tune \
+ && pip install --no-cache-dir pytest
+
+# Both console scripts are now on PATH:
+#   pg-explain-mcp, pg-explain-parse, pg-explain-config
+#   pg-tune-mcp, pg-tune-backup, pg-tune-restore,
+#   pg-tune-backups, pg-tune-config
+
+CMD ["bash"]
+

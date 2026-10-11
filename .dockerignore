@@ -1,0 +1,37 @@
+# Test sandbox (SQLite dbs and backups created by tests)
+config/checks.db
+config/backups/
+pg-tune/config/tune.db
+pg-tune/config/backups/
+pg-tune/tests/test_tune.db*
+pg-tune/tests/test_backups/
+
+# Git, CI, docs
+.git/
+.github/
+.gitignore
+
+# Not needed inside the image
+usage_examples/
+images/
+CHANGELOG.md
+DISCLAIMER.md
+
+# Editor backup / swap files
+*~
+*.swp
+*.swo
+.*.sw?
+
+# Python caches
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Virtual envs
+.venv/
+venv/
+env/

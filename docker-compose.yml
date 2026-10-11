@@ -1,0 +1,43 @@
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: tuner
+      POSTGRES_PASSWORD: tuner
+      POSTGRES_DB: pg_tune_test
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pg_tune"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  pg-tune:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    working_dir: /app/pg-tune
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGUSER: tuner
+      PGPASSWORD: tuner
+      PGDATABASE: pg_tune_test
+      PG_TUNE_ALLOW_WRITES: "yes"
+      PG_TUNE_BACKUP_DIR: /data/backups
+    volumes:
+      - tune-data:/data
+    # Default command runs the integration tests once, then exits.
+    # For interactive use, override with:
+    #     docker compose run --rm pg-tune bash
+    command: ["pytest", "tests/", "-v"]
+
+volumes:
+  pgdata:
+  tune-data:
+
