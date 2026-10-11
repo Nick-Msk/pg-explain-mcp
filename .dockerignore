@@ -19,6 +19,7 @@ DISCLAIMER.md
 
 # Editor backup / swap files
 *~
+*.py~
 *.swp
 *.swo
 .*.sw?
