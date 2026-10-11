@@ -3,7 +3,7 @@ name = "pg-explain-mcp"
 version = "0.4.0"
 description = "MCP server for analyzing PostgreSQL query plans"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.10,<3.13"
 license = { text = "MIT" }
 authors = [
     { name = "Nick-Msk" },
