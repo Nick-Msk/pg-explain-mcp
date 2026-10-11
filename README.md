@@ -538,6 +538,115 @@ Record every `set_checker_value` and `reset_checker_value` call into
 a `param_history` table with timestamp, old value, and new value.
 Useful in shared deployments.
 
+## Development
+
+The repository is a [uv workspace](https://docs.astral.sh/uv/concepts/workspaces/)
+with two packages:
+
+- **`pg-explain-mcp`** — the read-only plan analyzer (root package).
+- **`pg-tune`** — the write-capable tuning companion (`pg-tune/`).
+
+Both share one `.venv` and one `uv.lock`. You do not install them
+separately; `uv sync --all-packages` installs both at once. The
+`Makefile` at the repository root wraps the common commands.
+
+`pg-tune` is not meaningful on its own — it imports `analyzer` and
+`Issue` from `pg-explain-mcp`. Keeping the two in one repository and
+one workspace is deliberate.
+
+### Prerequisites
+
+- **uv** — `brew install uv` (macOS) or see
+  [docs.astral.sh/uv](https://docs.astral.sh/uv/).
+- **PostgreSQL 18+** — for integration tests, running either locally
+  or via Docker. `pg_dump` and `pg_restore` must be on `PATH` and
+  match the server version closely enough for the custom format to
+  round-trip.
+- **Docker** — only for the `docker-*` targets.
+
+### Setup
+
+```bash
+git clone https://github.com/Nick-Msk/pg-explain-mcp.git
+cd pg-explain-mcp
+
+make sync          # uv sync --all-packages
+```
+
+`make sync` creates `.venv`, installs both packages in editable mode,
+and writes nothing outside the repository except the uv cache.
+
+### Local targets
+
+```bash
+make help          # list every target, always up to date
+make lint          # ruff check on both projects
+
+make test          # pg-explain-mcp + pg-tune unit tests, no database
+make test-explain  # pg-explain-mcp only
+make test-tune     # pg-tune only
+
+make test-tune-integration  # live DB; uses $PGDATABASE or 'tunetest1'
+make test-tune-all          # pg-tune units + integration
+```
+
+`make test` runs `pg-explain-mcp` unit tests and `pg-tune` unit
+tests, but **not** the integration cycle — those need a database.
+Set `PGDATABASE` (and `PGHOST`, `PGUSER`, `PGPASSWORD` if needed)
+before calling `make test-tune-integration`. The integration tests
+create their own throwaway databases named
+`pg_tune_bkp_test_<random>` and drop them on teardown; your
+`PGDATABASE` is only used to open a connection.
+
+### Docker targets
+
+```bash
+make docker-up                    # start PostgreSQL 18 on localhost:5433
+make docker-down                  # stop containers, keep volumes
+make docker-logs                  # tail postgres logs
+make docker-build                 # rebuild the pg-tune image
+
+make docker-test                  # all tests inside the container
+make docker-test-unit             # pg-tune unit tests only
+make docker-test-tune-integration # pg-tune integration only
+make docker-test-tune-all         # pg-tune units + integration
+make docker-shell                 # shell inside the container
+```
+
+Docker runs a **PostgreSQL 18** server on port `5433` (5432 is
+usually taken by a local install) and a Python 3.12 container built
+from `Dockerfile.dev`. The container has `uv`, `pg_dump 18`, and
+both projects installed. Integration tests inside the container run
+against the container's PostgreSQL, not against your host's.
+
+`make docker-test` is the "clean room" check — it does not touch
+your local `.venv`, your local PostgreSQL, or your `config/tune.db`.
+Use it before pushing if you suspect the issue is environment-specific.
+
+### Housekeeping
+
+```bash
+make clean         # remove __pycache__, .pytest_cache, test sandboxes
+```
+
+### Layout
+
+```
+pg-explain-mcp/
+├── Makefile                # targets described above
+├── pyproject.toml          # root package + uv workspace config
+├── uv.lock                 # single lock file for both packages
+├── .python-version         # pinned Python (3.12)
+├── Dockerfile.dev          # image used by docker-* targets
+├── docker-compose.yml      # postgres:18 + pg-tune container
+├── src/pg_explain_mcp/     # root package sources
+├── pg-tune/
+│   ├── pyproject.toml      # workspace member
+│   ├── src/pg_tune/        # pg-tune sources
+│   └── tests/              # pg-tune tests, incl. integration
+└── tests/                  # pg-explain-mcp tests
+```
+
 ## Disclaimer
 
 This project is a **diagnostic tool provided "as is"**. Recommendations
