@@ -13,6 +13,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `gather_info` dict as structured context, alongside the
   human-readable `message`. Enables downstream consumers — an
   LLM prompt, `pg-tune` proposers — to build fixes from typed
+  fields instead of parsing prose. Filled in for all eleven
+  checks.
+
+- **uv workspace.** The repository is now a single
+  [uv](https://docs.astral.sh/uv/) workspace with one `.venv` and
+  one `uv.lock` for both `pg-explain-mcp` and `pg-tune`.
+  `pg-tune` resolves `pg-explain-mcp` from the workspace, not
+  from PyPI.
+
+- **`Makefile`.** Common developer commands wrapped in targets:
+  `make test`, `make lint`, `make docker-test`,
+  `make test-tune-integration`, and friends. `make help` lists
+  everything.
+
+- **`Dockerfile.dev` and `docker-compose.yml`.** Reproducible
+  Python 3.12 environment with PostgreSQL 18 client tools from
+  PGDG. Compose brings up a `postgres:18` service on port 5433
+  for integration tests.
+
+### Changed
+
+- **`pg-tune` backup compression is chosen by trial.** `pg_dump
+  --help` does not advertise available compression methods, and
+  `pg_config --configure` describes the server install, not the
+  client binary on `PATH`. `make_backup` now tries `--compress=
+  zstd:19` and falls back to `--compress=gzip:9` only when the
+  binary explicitly reports zstd unsupported. Other failures
+  (connection, permissions, disk) are not retried.
+
+- **`pg-tune` settings unified into one table.** `tune_allows`
+  became `tune_settings` with a `category` column (`ALLOWS`,
+  `SETTINGS`). One API: `list_settings`, `get_setting`,
+  `set_setting`, `reset_setting`. The CLI gained `--show [CAT]`,
+  `--set`, `--reset CAT [NAME]`, and `--reset-all`.
+
+- **`tune_vec_params` gained `scope` and `raw_key`.** The
+  metric-to-source mapping is now data, not code. Adding a metric
+  is one `INSERT`.
+
+### Fixed
+
+- **`pg-tune` no longer assumes zstd support.** Pre-16 `pg_dump`
+  installs and builds without `--with-zstd` are handled by the
+  gzip fallback.
+
+- **`license` metadata uses SPDX strings, not TOML tables.**
+  `license = { text = "MIT" }` became `license = "MIT"`, and the
+  superseded `License :: OSI Approved :: MIT License` classifier
+  was removed. Required for PEP 639 and setuptools >= 77.
+
+- **Editable install on Python 3.14 no longer breaks the
+  workspace.** `.python-version` pins 3.12 to match CI matrix.
+
+### Added
+
+- **`Issue.context`.** Every issue now carries the check's
+  `gather_info` dict as structured context, alongside the
+  human-readable `message`. Enables downstream consumers — an
+  LLM prompt, `pg-tune` proposers — to build fixes from typed
   fields instead of parsing prose.
 
 ## [0.5.2] — 2026-10-03
