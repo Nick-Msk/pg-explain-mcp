@@ -41,7 +41,7 @@ ENV UV_LINK_MODE=copy \
 # Dependency layer — cached until manifests change.
 COPY pyproject.toml uv.lock .python-version ./
 COPY pg-tune/pyproject.toml pg-tune/pyproject.toml
-RUN uv sync --frozen --no-install-project --all-packages
+RUN uv sync --frozen --no-install-workspace --all-packages
 
 # Project layer — invalidated on any source change.
 COPY src/ src/
