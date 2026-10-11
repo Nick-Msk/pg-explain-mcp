@@ -22,7 +22,7 @@ sync:  ## install/refresh both packages into .venv
 # Local — lint and tests, no database
 # ---------------------------------------------------------------------------
 
-.PHONY: lint test test-explain test-tune
+.PHONY: lint test test-explain test-tune test-tune-integration test-tune-all
 lint:  ## ruff over both projects
 	$(UV) run ruff check src tests
 	cd pg-tune && $(UV) run ruff check src tests
@@ -36,6 +36,15 @@ test-explain:  ## pg-explain-mcp unit tests only
 
 test-tune:  ## pg-tune unit tests only
 	cd pg-tune && $(UV) run pytest -v
+
+test-tune-integration:  ## pg-tune integration tests against $PGHOST (live DB)
+	cd pg-tune && \
+	 	PGDATABASE=$${PGDATABASE:-tunetest1} PG_TEST_INTEGRATION=1 \
+		$(UV) run pytest \
+	    	tests/test_integration_backup_restore.py -v
+
+test-tune-all: test-tune test-tune-integration  ## pg-tune: unit + integration
+	@echo "pg-tune: all tests passed."
 
 # ---------------------------------------------------------------------------
 # Docker — bring the stack up/down
@@ -58,17 +67,21 @@ docker-logs:  ## tail logs from the postgres container
 # Docker — tests inside the container
 # ---------------------------------------------------------------------------
 
-.PHONY: docker-test docker-test-unit docker-test-integration
+.PHONY: docker-test docker-test-unit docker-test-tune-integration docker-test-tune-all
 docker-test:  ## all tests inside the container (unit + integration)
 	$(COMPOSE) run --rm -e PG_TEST_INTEGRATION=1 pg-tune \
-	    pytest tests/ -v
+	$(UV) run pytest tests/ -v
 
 docker-test-unit:  ## unit tests only, inside the container
-	$(COMPOSE) run --rm pg-tune pytest tests/ -v
+	$(COMPOSE) run --rm pg-tune \
+	$(UV) run pytest tests/ -v
 
-docker-test-integration:  ## integration tests only, inside the container
+docker-test-tune-integration:  ## integration tests only, inside the container
 	$(COMPOSE) run --rm -e PG_TEST_INTEGRATION=1 pg-tune \
-	    pytest tests/test_integration_backup_restore.py -v
+	$(UV) run pytest tests/test_integration_backup_restore.py -v
+
+docker-test-tune-all: docker-test-unit docker-test-tune-integration  ## pg-tune: unit + integration, in container
+	@echo "pg-tune (container): all tests passed."
 
 # ---------------------------------------------------------------------------
 # Docker — interactive

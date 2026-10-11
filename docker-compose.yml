@@ -35,7 +35,7 @@ services:
     # Default command runs the integration tests once, then exits.
     # For interactive use, override with:
     #     docker compose run --rm pg-tune bash
-    command: ["pytest", "tests/", "-v"]
+    command: ["uv", "run", "pytest", "tests/", "-v"]
 
 volumes:
   pgdata:
