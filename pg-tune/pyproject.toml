@@ -10,14 +10,13 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 dependencies = [
+    "pg-explain-mcp",
     "mcp>=1.0.0,<2.0.0",
     "psycopg[binary]>=3.0"
-    # pg-explain-mcp is intentionally not listed here yet: it is
-    # not published on PyPI. Install it separately as an editable
-    # dependency from the repository root:
-    #     pip install -e ..
-    # When pg-explain-mcp is published, add the pin back.
 ]
+
+[tool.uv.sources]
+pg-explain-mcp = { workspace = true }
 
 [project.scripts]
 pg-tune-mcp = "pg_tune.server:main"
