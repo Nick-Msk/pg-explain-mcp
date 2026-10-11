@@ -1,8 +1,10 @@
 # pg-tune — Python 3.12 + PostgreSQL 18 client tools
 #
-# The image contains pg_dump / pg_restore from PGDG (18.x), so
-# zstd compression is available out of the box. The Python side
-# has both pg-explain-mcp and pg-tune installed from source.
+# Dev image: includes pytest, ruff, sqlfluff. For production, use a
+# separate Dockerfile that runs `uv sync --no-dev`.
+#
+# Pinned uv version — see https://github.com/astral-sh/uv/releases
+# when upgrading.
 
 FROM python:3.12-slim-bookworm
 
@@ -22,32 +24,33 @@ RUN apt-get update \
  && apt-get purge -y --auto-remove curl gnupg \
  && rm -rf /var/lib/apt/lists/*
 
+# ---- uv (pinned) --------------------------------------------------
+COPY --from=ghcr.io/astral-sh/uv:0.5.11 /uv /uvx /usr/local/bin/
+
 # ---- Application --------------------------------------------------
-WORKDIR /app/pg-tune
+WORKDIR /app
 
-# Bring in both projects. Copy pyproject/src before README to keep
-# the cache layer valid when only docs change.
-COPY pyproject.toml /app/pyproject.toml
-COPY src/ /app/src/
-COPY README.md /app/README.md
-COPY config/schema.sql config/seed.sql /app/config/
+# Docker-friendly uv defaults:
+#   UV_LINK_MODE=copy         — hardlinks do not work across overlayfs
+#   UV_COMPILE_BYTECODE=1     — precompile, faster cold start
+#   UV_PYTHON_DOWNLOADS=never — use the system Python from the base image
+ENV UV_LINK_MODE=copy \
+    UV_COMPILE_BYTECODE=1 \
+    UV_PYTHON_DOWNLOADS=never
 
-COPY pg-tune/pyproject.toml /app/pg-tune/pyproject.toml
-COPY pg-tune/src/ /app/pg-tune/src/
-COPY pg-tune/README.md /app/pg-tune/README.md
-COPY pg-tune/tests/ /app/pg-tune/tests/
-COPY pg-tune/config/tune_schema.sql pg-tune/config/tune_seed.sql \
-     /app/pg-tune/config/
-COPY tests/ /app/tests
+# Dependency layer — cached until manifests change.
+COPY pyproject.toml uv.lock .python-version ./
+COPY pg-tune/pyproject.toml pg-tune/pyproject.toml
+RUN uv sync --frozen --no-install-project --all-packages
 
-RUN pip install --no-cache-dir -e /app \
- && pip install --no-cache-dir -e /app/pg-tune \
- && pip install --no-cache-dir pytest
+# Project layer — invalidated on any source change.
+COPY src/ src/
+COPY pg-tune/src/ pg-tune/src/
+COPY config/ config/
+COPY pg-tune/config/ pg-tune/config/
+COPY tests/ tests/
+COPY pg-tune/tests/ pg-tune/tests/
+RUN uv sync --frozen --all-packages
 
-# Both console scripts are now on PATH:
-#   pg-explain-mcp, pg-explain-parse, pg-explain-config
-#   pg-tune-mcp, pg-tune-backup, pg-tune-restore,
-#   pg-tune-backups, pg-tune-config
-
-CMD ["bash"]
+CMD ["uv", "run", "pg-tune-mcp"]
 
