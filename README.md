@@ -661,6 +661,7 @@ create their own throwaway databases named
 ### Docker targets
 
 ```bash
+make check-docker                 # verify CLI, daemon, compose
 make docker-up                    # start PostgreSQL 18 on localhost:5433
 make docker-down                  # stop containers, keep volumes
 make docker-logs                  # tail postgres logs

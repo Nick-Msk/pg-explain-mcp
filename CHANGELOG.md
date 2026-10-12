@@ -50,6 +50,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   PGDG. Compose brings up a `postgres:18` service on port 5433
   for integration tests.
 
+- **`make check-docker`.** Verifies the Docker CLI, the daemon, and
+  Compose are available before any other `docker-*` target runs.
+  On failure, prints per-OS install hints and a symlink recipe for
+  standalone `docker-compose` binaries. `COMPOSE` in the Makefile
+  auto-detects between `docker compose` and `docker-compose`.
+
 ### Changed
 
 - **`pg-tune` backup compression is chosen by trial.** `pg_dump
