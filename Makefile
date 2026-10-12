@@ -88,6 +88,55 @@ docker-test-tune-all: docker-test-unit docker-test-tune-integration  ## pg-tune:
 # Docker — interactive
 # ---------------------------------------------------------------------------
 
+# --- tooling ---
+DOCKER  := docker
+COMPOSE := $(shell \
+    if $(DOCKER) compose version >/dev/null 2>&1; then echo "$(DOCKER) compose"; \
+    elif command -v docker-compose >/dev/null 2>&1; then echo "docker-compose"; \
+    else echo "$(DOCKER) compose"; fi)
+
+# ---------------------------------------------------------------------------
+# Docker — environment check
+# ---------------------------------------------------------------------------
+
+docker-build docker-up docker-down docker-logs \
+docker-test docker-test-unit docker-test-tune-integration \
+docker-test-tune-all docker-shell: check-docker
+
+.PHONY: check-docker
+check-docker:  ## verify Docker CLI, daemon, and Compose are available
+	@command -v $(DOCKER) >/dev/null 2>&1 || { \
+	    echo "ERROR: docker CLI not found in PATH" >&2; \
+	    echo "  macOS:  brew install --cask docker   (or: brew install colima)" >&2; \
+	    echo "  Debian: sudo apt install docker.io" >&2; \
+	    echo "  Fedora: sudo dnf install docker" >&2; \
+	    exit 1; \
+	}
+	@$(DOCKER) info >/dev/null 2>&1 || { \
+	    echo "ERROR: docker daemon is not running" >&2; \
+	    echo "  macOS:  open -a Docker   (wait until the menu bar icon stops animating)" >&2; \
+	    echo "  Linux:  sudo systemctl start docker" >&2; \
+	    exit 1; \
+	}
+	@if ! $(DOCKER) compose version >/dev/null 2>&1 && \
+	    ! command -v docker-compose >/dev/null 2>&1; then \
+	    echo "ERROR: Docker Compose is not available" >&2; \
+	    echo "" >&2; \
+	    echo "  Install the plugin:" >&2; \
+	    echo "    Debian/Ubuntu:  sudo apt install docker-compose-plugin" >&2; \
+	    echo "                    (older images: docker-compose-v2 or docker-compose)" >&2; \
+	    echo "    Fedora:         sudo dnf install docker-compose-plugin" >&2; \
+	    echo "    macOS:          comes with Docker Desktop or colima" >&2; \
+	    echo "" >&2; \
+	    echo "  Or, if a standalone docker-compose binary is installed but" >&2; \
+	    echo "  'docker compose' does not recognise it, link it as a plugin:" >&2; \
+	    echo "    mkdir -p ~/.docker/cli-plugins" >&2; \
+	    echo "    ln -sf \$$(command -v docker-compose) ~/.docker/cli-plugins/docker-compose" >&2; \
+	    exit 1; \
+	fi
+	@echo "docker:  $$($(DOCKER) --version)"
+	@echo "compose: $$($(COMPOSE) version)"
+
 .PHONY: docker-shell
 docker-shell:  ## open a shell inside the pg-tune container
 	$(COMPOSE) run --rm pg-tune bash
