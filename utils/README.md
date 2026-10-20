@@ -131,6 +131,31 @@ WHERE tsv @@ to_tsquery('english', 'war & peace');
   HF_TOKEN=your_token uv run python download_text.py --limit 10000
   ```
 
+### One-step load: `load_to_pg.py`
+
+If you want to skip the CSV/manual-copy dance, use the wrapper that does
+everything in one command:
+
+```bash
+uv run python utils/load_to_pg.py --dbname mydb --table-name books --limit 1000
+```
+
+It connects to PostgreSQL, creates the table, downloads the data, loads
+it via `COPY FROM STDIN`, and runs `VACUUM ANALYZE` — atomically, in one
+transaction.
+
+Options:
+
+- `--table-name NAME` — target table (default: `books`)
+- `--override` — drop the table if it already exists
+- `--limit N` — number of records to download
+- `--host`, `--port`, `--dbname`, `--user`, `--password` — PostgreSQL connection
+- `--keep-csv PATH` — save the intermediate CSV for debugging
+
+Or via environment variables (`PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`,
+`PGPASSWORD`), which are the standard libpq variables.
+
+
 ### License
 
 The script uses third-party datasets from Hugging Face. Before using them in production, check the license of the specific dataset on its page.
