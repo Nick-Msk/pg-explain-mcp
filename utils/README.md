@@ -24,6 +24,26 @@ uv pip install datasets
 
 ### Usage
 
+### Quick start (bash wrapper)
+
+```bash
+./load.sh books3 66 --override
+```
+
+This is a thin wrapper around `load_to_pg.py` that:
+
+- Takes only `<table_name> <limit>` as positional arguments
+- Reads PostgreSQL connection from the standard `PGHOST`/`PGPORT`/`PGDATABASE`/`PGUSER`/`PGPASSWORD` env vars
+- Deactivates any active venv before calling `uv run` (no warnings)
+- Passes any extra flags through to the Python script
+
+Add an alias for convenience:
+
+```bash
+alias ltp='~/code/pg-explain-mcp/utils/load.sh'
+ltp books3 66 --override
+```
+
 ```bash
 uv run python download_text.py [OPTIONS]
 ```
@@ -131,29 +151,30 @@ WHERE tsv @@ to_tsquery('english', 'war & peace');
   HF_TOKEN=your_token uv run python download_text.py --limit 10000
   ```
 
-### One-step load: `load_to_pg.py`
+### Two-phase pipeline: `load_to_pg.py`
 
-If you want to skip the CSV/manual-copy dance, use the wrapper that does
-everything in one command:
+The script has two independent phases:
+
+| Phase | What it does | Flag to skip |
+|-------|--------------|--------------|
+| `load` | Downloads data from HF, creates table, COPYs data | `--skip-load` |
+| `process` | Adds `tsv` tsvector column, builds GIN index, VACUUM ANALYZE | `--skip-process` |
+
+Common invocations:
 
 ```bash
-uv run python utils/load_to_pg.py --dbname mydb --table-name books --limit 1000
+# Full pipeline
+uv run python load_to_pg.py --dbname mydb --table-name books --limit 1000 --override
+
+# Only rebuild tsv + GIN on existing data
+uv run python load_to_pg.py --dbname mydb --table-name books --skip-load
+
+# Only load raw data (no tsv yet)
+uv run python load_to_pg.py --dbname mydb --table-name books --limit 1000 --skip-process
+
+# Different FTS config (e.g. Russian)
+uv run python load_to_pg.py --dbname mydb --table-name books_ru --fts-config russian
 ```
-
-It connects to PostgreSQL, creates the table, downloads the data, loads
-it via `COPY FROM STDIN`, and runs `VACUUM ANALYZE` — atomically, in one
-transaction.
-
-Options:
-
-- `--table-name NAME` — target table (default: `books`)
-- `--override` — drop the table if it already exists
-- `--limit N` — number of records to download
-- `--host`, `--port`, `--dbname`, `--user`, `--password` — PostgreSQL connection
-- `--keep-csv PATH` — save the intermediate CSV for debugging
-
-Or via environment variables (`PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`,
-`PGPASSWORD`), which are the standard libpq variables.
 
 
 ### License
