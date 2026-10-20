@@ -75,7 +75,7 @@ From psql, in the directory where the CSV is located:
 Or with an absolute path:
 
 ```sql
-\copy books(title, author, text) FROM '/Users/skelet/pg-test/books_9.csv' WITH (FORMAT csv, HEADER true)
+\copy books(title, author, text) FROM '/<path>/books_9.csv' WITH (FORMAT csv, HEADER true)
 ```
 
 #### Step 3. Gather statistics

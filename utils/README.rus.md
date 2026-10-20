@@ -75,7 +75,7 @@ CREATE TABLE books (
 Или с абсолютным путём:
 
 ```sql
-\copy books(title, author, text) FROM '/Users/skelet/pg-test/books_9.csv' WITH (FORMAT csv, HEADER true)
+\copy books(title, author, text) FROM '/<path>/books_9.csv' WITH (FORMAT csv, HEADER true)
 ```
 
 #### Шаг 3. Собрать статистику
