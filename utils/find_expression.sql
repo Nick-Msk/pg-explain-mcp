@@ -175,3 +175,40 @@ AS $$
     ORDER BY chunk;
 $$;
 
+-- ---------------------------------------------------------------------------
+-- find_books — one row per book. For result lists in a UI/agent.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION find_books(
+    p_query         text,
+    p_limit         int       DEFAULT 20,
+    p_fts_config    regconfig DEFAULT 'english',
+    p_offset        int       DEFAULT 0
+)
+RETURNS TABLE (
+    book_id  int,
+    title    text,
+    author   text,
+    n_chunks int,
+    chunks   int[]
+)
+LANGUAGE sql STABLE
+AS $$
+    SELECT
+        bt.book_id,
+        COALESCE(bh.title, '<NO TITLE>') AS title,
+        bh.author,
+        COUNT(*)::int AS n_chunks,
+        array_agg(bt.chunk ORDER BY bt.chunk) AS chunks
+    FROM book_text bt
+    JOIN book_header bh ON bh.id = bt.book_id
+    WHERE bt.tsv @@ websearch_to_tsquery(p_fts_config, p_query)
+    GROUP BY bt.book_id, bh.title, bh.author
+    ORDER BY n_chunks DESC, bt.book_id
+    LIMIT p_limit
+    OFFSET p_offset;
+$$;
+
+COMMENT ON FUNCTION find_books(text, int, regconfig, int) IS
+    'One row per matching book: title, author, number of matching chunks, '
+    'and array of matching chunk numbers. Ordered by relevance (most mentions first).';
+
