@@ -1,184 +1,285 @@
-# Utils
+# Utils — Book Loader & Full-Text Search
 
-A collection of helper scripts for test data preparation and PostgreSQL operations.
+Helper scripts for downloading real book texts from Hugging Face and loading them into PostgreSQL for testing full-text search with GIN indexes.
 
-## `download_text.py`
+Built and tested on PostgreSQL 18–19. Works on any PostgreSQL 12+ (needs `GENERATED ALWAYS AS ... STORED` and `websearch_to_tsquery`).
 
-A script to download real-world text from [Hugging Face](https://huggingface.co/) datasets and save it as CSV. Its primary purpose is to quickly obtain a large volume of real text for testing full-text search and GIN indexes in PostgreSQL.
-
-### What it does
-
-- Connects to a dataset in **streaming mode** — it does not download the entire dataset to disk, but reads only the number of records you specify.
-- Saves the result as a CSV with `title`, `author`, and `text` columns.
-- Cleans newlines in the text so the CSV reads correctly via `COPY` / `\copy`.
-- Force-exits the process after writing to prevent background Hugging Face threads from blocking termination.
-
-### Requirements
+## Requirements
 
 - Python 3.10+
-- The `datasets` package (installed via `uv`)
+- PostgreSQL 12+
+- `uv` for environment management
+- `datasets` and `psycopg[binary]` packages
+
+Dependencies are declared in `utils/pyproject.toml`; install with:
 
 ```bash
-uv pip install datasets
+cd utils
+uv sync
 ```
 
-### Usage
+---
 
-### Quick start (bash wrapper)
+## Schema
+
+Two tables, fixed names:
+
+```sql
+book_header (id, title, author, tsv)
+  tsv: setweight(title,  'A') ||
+       setweight(author, 'B')
+
+book_text   (book_id, chunk, text_chunk, tsv)
+  PK: (book_id, chunk)
+  FK: book_id → book_header(id) ON DELETE CASCADE
+  tsv: to_tsvector(text_chunk)
+```
+
+Each book is split into chunks of up to 250 000 characters at word boundaries, because PostgreSQL's `tsvector` cannot exceed **1 MB**. Without chunking, any book longer than ~50 pages would fail to load with:
+
+```
+ERROR: string is too long for tsvector (… bytes, max 1048575 bytes)
+```
+
+`book_header.tsv` is weighted so header matches rank higher than text matches. It's also tiny (title + author only, never TOASTed), which makes header ranking essentially free.
+
+---
+
+## Quick start
 
 ```bash
-./load.sh books3 66 --override
+cd utils
+./load-def.sh 5000 --override --use-cache
 ```
 
-This is a thin wrapper around `load_to_pg.py` that:
+This:
 
-- Takes only `<table_name> <limit>` as positional arguments
-- Reads PostgreSQL connection from the standard `PGHOST`/`PGPORT`/`PGDATABASE`/`PGUSER`/`PGPASSWORD` env vars
-- Deactivates any active venv before calling `uv run` (no warnings)
-- Passes any extra flags through to the Python script
+1. Connects to PostgreSQL (using `PGHOST`/`PGPORT`/`PGDATABASE`/`PGUSER`/`PGPASSWORD` or defaults).
+2. Drops `book_header` and `book_text` if they exist.
+3. Downloads 5000 books from `AdhyanshVerma/pg-en` (streaming; only fetches what's needed).
+4. Splits each book into ≤250 000-character chunks.
+5. `COPY`s both tables from CSVs.
+6. Runs `VACUUM ANALYZE`.
+7. Keeps the CSVs in `storage/` for fast reload.
 
-Add an alias for convenience:
+Expected time on a modern laptop:
+
+- **First run:** 10–20 minutes (mostly downloading).
+- **Subsequent runs with `--use-cache`:** ~30 seconds (just COPY + VACUUM).
+
+---
+
+## CLI reference
+
+### `load-def.sh <limit> [options]`
+
+Bash wrapper. Positional `<limit>` is the number of books (0 is allowed with `--skip-load`). All flags are passed to `load_to_pg.py`.
+
+| Flag | Description |
+|------|-------------|
+| `--override` | Drop `book_header` and `book_text` before loading |
+| `--use-cache` | Reuse CSVs from `storage/` if present; keep newly downloaded CSVs afterwards |
+| `--keep-csv` | Keep CSVs after download (usable by a later `--use-cache` run) |
+| `--skip-load` | Skip download and COPY (process existing tables only) |
+| `--skip-process` | Skip GIN indexes and VACUUM ANALYZE |
+| `--with-gin` | Create GIN indexes on `book_header.tsv` and `book_text.tsv` |
+| `--chunk-size N` | Characters per chunk (default: 250 000) |
+| `--fts-config NAME` | Text search config (default: `english`; also `russian`, `simple`, …) |
+| `--dataset NAME` | Hugging Face dataset (default: `AdhyanshVerma/pg-en`) |
+| `--host`, `--port`, `--dbname`, `--user`, `--password` | PostgreSQL connection overrides |
+
+### `load_to_pg.py`
+
+The underlying Python script. Accepts the same flags as the wrapper, plus `--storage-dir PATH`. Useful if you want to drive it from another script.
+
+### `find_expression.sql`
+
+Creates three search functions. Apply once per database:
 
 ```bash
-alias ltp='~/code/pg-explain-mcp/utils/load.sh'
-ltp books3 66 --override
+psql -d yourdb -f utils/find_expression.sql
 ```
+
+---
+
+## Caching
+
+CSV files are stored in `utils/storage/` with deterministic names:
+
+```
+books_<limit>_chunk<chunk_size>_header.csv
+books_<limit>_chunk<chunk_size>_text.csv
+```
+
+So:
 
 ```bash
-uv run python download_text.py [OPTIONS]
+./load-def.sh 5000 --override --use-cache   # first time: downloads and keeps
+./load-def.sh 5000 --override --use-cache   # second time: instant reload
+./load-def.sh 5000 --override --use-cache --with-gin   # add GIN, no download
 ```
 
-#### Parameters
+Changing `--limit` or `--chunk-size` produces a different filename → cache miss → new download. That's intentional: the data really is different.
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `-l`, `--limit` | `1000` | Number of records to download |
-| `-o`, `--output` | `books.csv` | Output CSV filename |
-| `-d`, `--dataset` | `AdhyanshVerma/pg-en` | Hugging Face dataset name |
-
-#### Examples
+To free space:
 
 ```bash
-# Download 9 books into books_9.csv
-uv run python download_text.py --limit 9 --output books_9.csv
-
-# Download 1000 books into books_1000.csv
-uv run python download_text.py --limit 1000 --output books_1000.csv
-
-# Use a different dataset
-uv run python download_text.py -d "some-other/dataset" -l 500 -o other.csv
+rm -rf utils/storage/
 ```
 
-### Importing into PostgreSQL
+---
 
-Once the CSV is ready, create the table and load the data. **Important:** if PostgreSQL is not running locally, use `\copy` (a client-side psql command) instead of `COPY` (a server-side command). Otherwise, the server will look for the file on its own filesystem, not yours.
+## Search API
 
-#### Step 1. Create the table
+Three tools with different costs. Pick the right one for your use case.
+
+### `find_expression(query, limit, fts_config, offset)` — fast
+
+Plain GIN scan + join, returns one row per matching chunk.
 
 ```sql
-CREATE TABLE books (
-    id SERIAL PRIMARY KEY,
-    title TEXT,
-    author TEXT,
-    text TEXT
-);
+SELECT * FROM find_expression('war peace');
+SELECT * FROM find_expression('"to be or not to be"');
+SELECT * FROM find_expression('love -war');
+SELECT * FROM find_expression('hamlet OR macbeth');
 ```
 
-#### Step 2. Load the data
+Returns:
 
-From psql, in the directory where the CSV is located:
+| Column | Description |
+|--------|-------------|
+| `book_id` | Header id |
+| `chunk` | Matching chunk number |
+| `title` | Book title |
+| `author` | Author |
+
+**Cost:** ~6–10 ms on 5000 books, no matter how many matches.
+
+Backed by `websearch_to_tsquery()`, so it understands Google-like syntax: `"exact phrase"`, `word -exclude`, `a OR b`, and default `AND`.
+
+### `get_snippet(book_id, chunk, query, fts_config)` — one highlighted fragment
 
 ```sql
-\copy books(title, author, text) FROM 'books_9.csv' WITH (FORMAT csv, HEADER true)
+SELECT get_snippet(book_id, chunk, 'war & peace')
+FROM find_expression('war peace')
+LIMIT 3;
 ```
 
-Or with an absolute path:
+Returns a text fragment with matched words wrapped in `<b>…</b>`. Works best when you only need a few snippets.
+
+**Cost:** ~15 ms per call, because `ts_headline` must decompress and parse the whole `text_chunk` (up to 250 KB from TOAST).
+
+So: 20 fast results + 3 snippets ≈ 6 + 45 = **51 ms**.
+
+### `find_expression_ranked(query, limit, fts_config, header_weight)` — everything
+
+One row per book, with snippets, list of matching chunks, and a relevance score.
 
 ```sql
-\copy books(title, author, text) FROM '/<path>/books_9.csv' WITH (FORMAT csv, HEADER true)
+SELECT * FROM find_expression_ranked('war peace', 10);
 ```
 
-#### Step 3. Gather statistics
+Returns:
+
+| Column | Description |
+|--------|-------------|
+| `book_id`, `title`, `author` | Book metadata |
+| `snippet` | Best fragment, matched words in `<b>…</b>` |
+| `chunks` | `int[]` — all matching chunk numbers |
+| `rank` | Weighted score (header × weight + chunk count) |
+
+**Cost:** ~150–170 ms on 5000 books (10 snippets). Use `--header_weight` (default 2.0) to control how much title/author matches matter.
+
+For UI-facing search: use `find_expression()` for the results list, then call `get_snippet()` lazily when the user expands a row. Use `find_expression_ranked()` only when you need everything at once.
+
+### `get_chunks(book_id, chunks)` — reconstruct a book
 
 ```sql
-VACUUM ANALYZE books;
+SELECT * FROM get_chunks(42, '{0,2,5}'::int[]);
 ```
 
-### Verifying the import
+Returns `(chunk, text_chunk)` for the specified chunks. Useful when you want to show the full context around a match.
 
-```sql
-SELECT count(*) FROM books;
-SELECT id, title, author, LEFT(text, 100) FROM books LIMIT 5;
-```
+---
 
-### Testing a GIN Index
+## Building GIN indexes
 
-Once the data is loaded, you can build a `tsvector` and a GIN index:
-
-```sql
--- Add a search vector column
-ALTER TABLE books ADD COLUMN tsv tsvector
-    GENERATED ALWAYS AS (
-        to_tsvector('english',
-            coalesce(title, '') || ' ' ||
-            coalesce(author, '') || ' ' ||
-            coalesce(text, '')
-        )
-    ) STORED;
-
--- Build the GIN index
-CREATE INDEX idx_books_tsv ON books USING GIN (tsv);
-
--- Check index size
-SELECT
-    pg_size_pretty(pg_relation_size('idx_books_tsv')) AS gin_index,
-    pg_size_pretty(pg_total_relation_size('books'))    AS total_with_data;
-
--- Test full-text search
-EXPLAIN (ANALYZE, BUFFERS)
-SELECT title, author
-FROM books
-WHERE tsv @@ to_tsquery('english', 'war & peace');
-```
-
-### Performance Notes
-
-- **TOAST.** Large texts are automatically offloaded by PostgreSQL into a separate TOAST storage. Therefore, `pg_relation_size('books')` will show only a few kilobytes (just the pointers), while `pg_table_size('books')` shows the actual size including texts. This is normal.
-- **Streaming.** Thanks to `streaming=True` and `dataset.take(n)`, the script reads only the required number of records and does not attempt to download the entire dataset.
-- **Hugging Face Token.** For large volumes (tens of thousands of records), it makes sense to register at huggingface.co, get a token, and pass it via an environment variable to avoid rate limits:
-
-  ```bash
-  HF_TOKEN=your_token uv run python download_text.py --limit 10000
-  ```
-
-### Two-phase pipeline: `load_to_pg.py`
-
-The script has two independent phases:
-
-| Phase | What it does | Flag to skip |
-|-------|--------------|--------------|
-| `load` | Downloads data from HF, creates table, COPYs data | `--skip-load` |
-| `process` | Adds `tsv` tsvector column, builds GIN index, VACUUM ANALYZE | `--skip-process` |
-
-Common invocations:
+After loading, create indexes once:
 
 ```bash
-# Full pipeline
-uv run python load_to_pg.py --dbname mydb --table-name books --limit 1000 --override
-
-# Only rebuild tsv + GIN on existing data
-uv run python load_to_pg.py --dbname mydb --table-name books --skip-load
-
-# Only load raw data (no tsv yet)
-uv run python load_to_pg.py --dbname mydb --table-name books --limit 1000 --skip-process
-
-# Different FTS config (e.g. Russian)
-uv run python load_to_pg.py --dbname mydb --table-name books_ru --fts-config russian
+./load-def.sh 0 --skip-load --with-gin
 ```
 
+Or manually, if you want to tune parameters:
 
-### License
+```sql
+\timing on
+CREATE INDEX idx_book_text_tsv   ON book_text   USING GIN (tsv);
+CREATE INDEX idx_book_header_tsv ON book_header USING GIN (tsv);
+```
 
-The script uses third-party datasets from Hugging Face. Before using them in production, check the license of the specific dataset on its page.
+Sizes on 5000 books (~5 GB of text):
+
+```
+idx_book_text_tsv    ~800 MB
+idx_book_header_tsv  ~1 MB
+```
+
+The header index is tiny because `title || author` is at most a few hundred bytes per row. It can still be a huge win: `find_expression_ranked()` uses it to rank books by title/author relevance without ever touching the text chunks.
+
+---
+
+## Performance notes
+
+### TOAST and why `pg_relation_size()` lies
+
+Large `text_chunk` values are offloaded to TOAST storage. That means:
+
+- `pg_relation_size('book_text')` shows ~100 KB (just TOAST pointers in the main heap).
+- `pg_table_size('book_text')` shows the real size (~5 GB) including TOAST.
+
+Both are correct. Use `pg_total_relation_size('book_text')` when you need the "all indexes + TOAST + heap" number.
+
+### Why `ts_rank_cd` on `book_text.tsv` is slow
+
+`ts_rank_cd` requires the full `tsvector`. On `book_text` that means reading ~10 TOAST pages per row, decompressing, and parsing. On 7895 matching chunks that's ~70 000 page reads → **250 ms**.
+
+`find_expression_ranked()` avoids this by ranking only on `book_header.tsv` (tiny, never TOASTed) + a chunk-count tie-breaker. It never calls `ts_rank_cd` on `book_text.tsv`.
+
+If you need true text-level ranking and can afford the cost, add it yourself:
+
+```sql
+SELECT book_id, MAX(ts_rank_cd(tsv, q)) AS r
+FROM book_text, websearch_to_tsquery('english', 'war & peace') q
+WHERE tsv @@ q
+GROUP BY book_id
+ORDER BY r DESC;
+```
+
+Budget ~300 ms.
+
+### Chunk size
+
+`--chunk-size` controls the trade-off:
+
+- **250 000 (default):** safe margin below the 1 MB `tsvector` limit, even for pathological text (dense unique tokens). Reliable.
+- **100 000:** smaller `ts_headline` payload per chunk (~5 ms instead of 15 ms), but more chunks and more join work.
+- **500 000:** fewer chunks, but some books will hit the 1 MB limit and fail to load.
+
+250 K is the sweet spot for a book corpus.
+
+### Hugging Face rate limits
+
+Unauthenticated requests to Hugging Face Hub are rate-limited. For large downloads (>10 000 books), register at huggingface.co and pass a token:
+
+```bash
+HF_TOKEN=hf_xxxxx ./load-def.sh 50000 --override --use-cache
+```
+
+---
+
+## License
+
+The scripts use third-party datasets from Hugging Face. Check the license of the specific dataset on its page before using it in production.
 
 
