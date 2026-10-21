@@ -223,36 +223,58 @@ def rank_books(query: str, limit: int = 10) -> list[dict[str, Any]]:
 # Tool 4: read_book_chunks (full text of specific chunks)
 # ---------------------------------------------------------------------------
 
-def read_book_chunks(book_id: int, chunks: list[int]) -> list[dict[str, Any]]:
-    """Fetch full text of specific chunks from one book (~10-50ms).
+def read_book_chunks(
+    book_id: int,
+    chunks: list[int],
+    context: int = 1,
+    max_centers: int = 3,
+    max_chars_per_chunk: int = 2500
+) -> list[dict[str, Any]]:
+    """Fetch contextual fragments around specific matching chunks from one book.
 
-    Use this when the user wants CONTEXT around a match — the full paragraph
-    or page, not just a snippet. Give it a book_id and the chunk numbers
-    you want.
+    Use this when the user wants a summary or compilation based on the text.
+    Give it the chunk numbers from search_books() or rank_books(). The tool
+    will pull those chunks PLUS the surrounding `context` chunks (to preserve
+    narrative flow), but strictly limits the output size.
 
-    Get chunk numbers from:
-      - search_books() -> returns one chunk per row
-      - rank_books()   -> returns `chunks` array per book
-
-    Returns full text_chunk values (up to 250 KB each). Truncate before
-    showing to the user if you only need first paragraphs.
+    Always cite the results in your final answer. Format the citation as:
+      [book_id=3941, chapter="The Forged Coupon", chunk=12]
+    If the chapter is empty or null, use just [book_id=..., chunk=...].
 
     Args:
         book_id: Book id.
-        chunks:  List of chunk numbers (e.g. [0, 2, 5]).
+        chunks: List of target chunk numbers (e.g. [5, 78, 145]).
+        context: Neighboring chunks before/after (default 1, max 2).
+        max_centers: Max target chunks to process (default 3).
+        max_chars_per_chunk: Truncate each to this many chars (default 2500).
 
     Returns:
-        [{"chunk": int, "text_chunk": str}, ...] sorted by chunk.
+        [{"chunk": int, "chapter": str, "text_chunk": str}, ...]
     """
     if not chunks:
         return []
+
+    chunks = sorted(list(set(chunks)))[:max_centers]
+    context = max(0, min(context, 2))
+    limit_chars = max(500, min(max_chars_per_chunk, 5000))
+
+    all_chunks = set()
+    for c in chunks:
+        for i in range(c - context, c + context + 1):
+            if i >= 0:
+                all_chunks.add(i)
+
+    all_chunks = sorted(list(all_chunks))
+
     with _cursor() as cur:
         cur.execute(
-            "SELECT * FROM get_chunks(%s, %s::int[])",
-            (book_id, chunks),
+            """
+            SELECT chunk, chapter, LEFT(text_chunk, %s) AS text_chunk
+            FROM get_chunks(%s, %s::int[])
+            """,
+            (limit_chars, book_id, all_chunks),
         )
         return cur.fetchall()
-
 
 # ---------------------------------------------------------------------------
 # Registration

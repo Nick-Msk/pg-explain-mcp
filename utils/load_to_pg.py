@@ -22,6 +22,7 @@ Caching:
 import argparse
 import csv
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -39,10 +40,16 @@ except ImportError:
     print("Error: 'psycopg' not installed. Run: uv pip install 'psycopg[binary]'", file=sys.stderr)
     sys.exit(1)
 
+CHAPTER_RE = re.compile(
+    r'^\s*(?:'
+    r'CHAPTER|Chapter|ГЛАВА|Глава|PART|Part|Часть|ЧАСТЬ'
+    r')\s+(?:[IVXLCDM]+|\d+)\b.*$',
+    re.MULTILINE
+)
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
 DEFAULT_STORAGE_DIR = SCRIPT_DIR / "storage"
-DEFAULT_CHUNK_SIZE = 8192
+DEFAULT_CHUNK_SIZE = 4096
 
 HEADER_TABLE = "book_header"
 TEXT_TABLE   = "book_text"
@@ -146,20 +153,38 @@ def connect(kwargs) -> psycopg.Connection:
 # Download
 # ---------------------------------------------------------------------------
 
-def chunk_text(text: str, chunk_size: int) -> list[str]:
+def chunk_text(text: str, chunk_size: int) -> list[tuple[str, str | None]]:
+    """Split text into chunks, tracking the nearest chapter header."""
     if not text:
-        return [""]
-    chunks, pos, n = [], 0, len(text)
+        return [("", None)]
+
+    # Собираем позиции всех заголовков глав
+    chapter_positions = [(m.start(), m.group(0).strip()) for m in CHAPTER_RE.finditer(text)]
+
+    def find_chapter(pos: int) -> str | None:
+        # Ищем последний заголовок перед позицией pos
+        current = None
+        for header_pos, header_title in chapter_positions:
+            if header_pos > pos:
+                break
+            current = header_title
+        return current
+
+    chunks = []
+    pos = 0
+    n = len(text)
     while pos < n:
         end = min(pos + chunk_size, n)
         if end < n:
             bp = text.rfind(" ", pos, end)
             if bp > pos + chunk_size // 2:
                 end = bp
-        chunks.append(text[pos:end].strip())
+
+        chunk_body = text[pos:end].strip()
+        chapter = find_chapter(pos)
+        chunks.append((chunk_body, chapter))
         pos = end
     return chunks
-
 
 def download_to_csv(dataset_name, limit, chunk_size, header_path: Path, text_path: Path):
     print(f"→ Streaming {limit} books from '{dataset_name}' ...")
@@ -167,11 +192,13 @@ def download_to_csv(dataset_name, limit, chunk_size, header_path: Path, text_pat
     dataset = load_dataset(dataset_name, split="train", streaming=True)
 
     books, total_chunks = 0, 0
+
     with open(header_path, "w", newline="", encoding="utf-8") as fh, \
          open(text_path,   "w", newline="", encoding="utf-8") as ft:
         wh, wt = csv.writer(fh), csv.writer(ft)
         wh.writerow(["id", "title", "author"])
-        wt.writerow(["book_id", "chunk", "text_chunk"])
+        # Добавили chapter в заголовок CSV
+        wt.writerow(["book_id", "chunk", "chapter", "text_chunk"])
 
         for row in dataset.take(limit):
             books += 1
@@ -181,10 +208,12 @@ def download_to_csv(dataset_name, limit, chunk_size, header_path: Path, text_pat
             text   = " ".join(text.split())
 
             wh.writerow([books, title, author])
-            for i, chunk in enumerate(chunk_text(text, chunk_size)):
-                wt.writerow([books, i, chunk])
-                total_chunks += 1
+            total_chunks += 1
 
+            # chunk_text теперь возвращает кортежи (text, chapter)
+            for i, (chunk, chapter) in enumerate(chunk_text(text, chunk_size)):
+                wt.writerow([books, i, chapter or "", chunk])
+                total_chunks += 1
             if books % 100 == 0:
                 print(f"  {books}/{limit} books, {total_chunks} chunks")
 
@@ -234,6 +263,7 @@ def create_obj(conn, args) -> None:
             "CREATE TABLE {} ("
             "  book_id INT NOT NULL REFERENCES {}(id) ON DELETE CASCADE,"
             "  chunk INT NOT NULL,"
+            "  chapter TEXT,"
             "  text_chunk TEXT,"
             "  tsv tsvector GENERATED ALWAYS AS ("
             "    to_tsvector({}::regconfig, coalesce(text_chunk,''))"
@@ -268,7 +298,7 @@ def load_to_postgres(conn, header_path, text_path) -> None:
         with open(text_path, "r", encoding="utf-8") as f:
             next(f)
             with cur.copy(sql.SQL(
-                "COPY {} (book_id, chunk, text_chunk) FROM STDIN WITH (FORMAT csv)"
+                "COPY {} (book_id, chunk, chapter, text_chunk) FROM STDIN WITH (FORMAT csv)"
             ).format(text_tbl)) as c:
                 for line in f:
                     c.write(line)

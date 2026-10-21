@@ -163,13 +163,14 @@ COMMENT ON FUNCTION find_expression_ranked(text, int, regconfig, float) IS
 
 
 -- ---------------------------------------------------------------------------
--- get_chunks — fetch full text for (book_id, chunks[]).
+-- get_chunks — fetch full text for (book_id, chapter, chunks[]).
 -- ---------------------------------------------------------------------------
+
 CREATE OR REPLACE FUNCTION get_chunks(p_book_id int, p_chunks int[])
-RETURNS TABLE (chunk int, text_chunk text)
+RETURNS TABLE (chunk int, chapter text, text_chunk text)
 LANGUAGE sql STABLE
 AS $$
-    SELECT chunk, text_chunk
+    SELECT chunk, chapter, text_chunk
     FROM book_text
     WHERE book_id = p_book_id AND chunk = ANY(p_chunks)
     ORDER BY chunk;
