@@ -278,6 +278,66 @@ HF_TOKEN=hf_xxxxx ./load-def.sh 50000 --override --use-cache
 
 ---
 
+## MCP tools (for LLM agents)
+
+The module `utils/tools/book_search.py` exposes the four search functions as MCP tools, ready to be picked up by any MCP-capable client (Continue, Claude Desktop, Cursor, etc.).
+
+| MCP tool | Wraps SQL | Cost | When the LLM should use it |
+|----------|-----------|------|---------------------------|
+| `search_books(query, limit, offset, unique_books)` | `find_expression` / `find_books` | ~10 ms | Default search. `unique_books=False` → one row per chunk; `unique_books=True` → one row per book with `chunks[]`. |
+| `get_book_snippet(book_id, chunk, query)` | `get_snippet` | ~15 ms | Show what matched — one highlighted fragment per call. |
+| `rank_books(query, limit)` | `find_expression_ranked` | ~150 ms | User asks for "best books" / "top matches with previews". |
+| `read_book_chunks(book_id, chunks)` | `get_chunks` | ~10–50 ms | User wants full context (paragraph/page) around a match. |
+
+### Connection
+
+By default, tools read `PGHOST` / `PGPORT` / `PGDATABASE` / `PGUSER` / `PGPASSWORD`. To override at server bootstrap:
+
+```python
+from tools.book_search import set_connection
+
+set_connection(host="db.local", dbname="books", user="reader")
+```
+
+### Standalone server
+
+`utils/tools/server.py` is a ready-to-run FastMCP server:
+
+```bash
+cd utils
+uv run python -m tools.server
+```
+
+### Wiring into Continue (or any MCP client)
+
+Create `utils/.continue/config.yaml`:
+
+```yaml
+name: utils-book-search
+version: 1.0.0
+schema: v1
+
+mcpServers:
+  - name: book-search
+    type: stdio
+    command: uv
+    args: [run, python, -m, tools.server]
+    cwd: .
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: "5432"
+      PGDATABASE: postgres
+      PGUSER: your_user
+```
+
+> `cwd: .` resolves to `utils/`, because Continue interprets it relative to the folder containing `.continue/`.
+
+MCP tools in Continue work **only in Agent mode**. After adding the config, reload the IDE, switch Continue to Agent, and check that the four tools appear in the tools list.
+
+A copy without secrets lives at `utils/.continue/config.example.yaml` — commit that one, and add `.continue/` to `.gitignore` so your local credentials never land in the repo.
+
+---
+
 ## License
 
 The scripts use third-party datasets from Hugging Face. Check the license of the specific dataset on its page before using it in production.

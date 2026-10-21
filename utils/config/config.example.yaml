@@ -1,0 +1,18 @@
+# utils/.continue/config.example.yaml
+name: utils-book-search
+version: 1.0.0
+schema: v1
+
+mcpServers:
+  - name: book-search
+    type: stdio
+    command: uv
+    args: [run, python, -m, tools.server]
+    cwd: .
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: "5432"
+      PGDATABASE: postgres
+      PGUSER: your_user
+      # PGPASSWORD: your_password
+
