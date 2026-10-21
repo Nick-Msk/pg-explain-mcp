@@ -42,7 +42,7 @@ except ImportError:
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
 DEFAULT_STORAGE_DIR = SCRIPT_DIR / "storage"
-DEFAULT_CHUNK_SIZE = 250_000
+DEFAULT_CHUNK_SIZE = 8192
 
 HEADER_TABLE = "book_header"
 TEXT_TABLE   = "book_text"
