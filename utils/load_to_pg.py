@@ -59,7 +59,8 @@ def parse_args():
     g_src = p.add_argument_group("Data source")
     g_src.add_argument("--limit",      type=int, default=1000)
     g_src.add_argument("--dataset",    default="AdhyanshVerma/pg-en")
-    g_src.add_argument("--chunk-size", type=int, default=DEFAULT_CHUNK_SIZE)
+    g_src.add_argument("--chunk-size", type=int, default=DEFAULT_CHUNK_SIZE,
+                        help=f"Chars per text chunk (default: {DEFAULT_CHUNK_SIZE})")
     g_src.add_argument("--storage-dir", default=str(DEFAULT_STORAGE_DIR))
 
     g_cache = p.add_argument_group("Caching")
@@ -75,8 +76,7 @@ def parse_args():
     g_proc.add_argument("--skip-process", action="store_true")
     g_proc.add_argument("--with-gin", action="store_true")
 
-    g_src.add_argument("--chunk-size", type=int, default=DEFAULT_CHUNK_SIZE,
-                        help=f"Chars per text chunk (default: {DEFAULT_CHUNK_SIZE})")
+
     return p.parse_args()
 
 
