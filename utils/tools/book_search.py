@@ -28,7 +28,6 @@ from typing import Any
 import psycopg
 from psycopg.rows import dict_row
 
-
 # ---------------------------------------------------------------------------
 # Connection configuration
 # ---------------------------------------------------------------------------
@@ -61,11 +60,16 @@ def set_connection(
     if dsn is not None:
         _conn_kwargs["conninfo"] = dsn
         return
-    if host     is not None: _conn_kwargs["host"]     = host
-    if port     is not None: _conn_kwargs["port"]     = port
-    if dbname   is not None: _conn_kwargs["dbname"]   = dbname
-    if user     is not None: _conn_kwargs["user"]     = user
-    if password is not None: _conn_kwargs["password"] = password
+    if host     is not None:
+        _conn_kwargs["host"]     = host
+    if port     is not None:
+        _conn_kwargs["port"]     = port
+    if dbname   is not None:
+        _conn_kwargs["dbname"]   = dbname
+    if user     is not None:
+        _conn_kwargs["user"]     = user
+    if password is not None:
+        _conn_kwargs["password"] = password
 
 
 def _connect() -> psycopg.Connection:

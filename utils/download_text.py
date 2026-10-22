@@ -8,8 +8,8 @@ and stops after reaching the specified limit.
 
 import argparse
 import csv
-import sys
 import os
+import sys
 
 try:
     from datasets import load_dataset
@@ -89,14 +89,14 @@ def main():
         sys.exit(1)
 
     print(f"\nDone! File '{args.output}' contains {count} records.")
-    print(f"To import into PostgreSQL, run:")
-    print(f"  CREATE TABLE books (id SERIAL PRIMARY KEY, title TEXT, author TEXT, text TEXT);")
+    print("To import into PostgreSQL, run:")
+    print("  CREATE TABLE books (id SERIAL PRIMARY KEY, title TEXT, author TEXT, text TEXT);")
     print(f"  COPY books(title, author, text) FROM '/absolute/path/to/{args.output}' WITH (FORMAT csv, HEADER true);")
 
 
 if __name__ == "__main__":
     main()
-    # Принудительно завершаем процесс, чтобы фоновые потоки streaming-а 
+    # Принудительно завершаем процесс, чтобы фоновые потоки streaming-а
     # не блокировали выход из программы (ошибка ESRCH).
     os._exit(0)
 

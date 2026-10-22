@@ -24,8 +24,11 @@ import csv
 import os
 import re
 import sys
-import time
 from pathlib import Path
+
+from chapter_parser import ChapterParser
+
+_parser = ChapterParser()
 
 try:
     from datasets import load_dataset
@@ -153,22 +156,82 @@ def connect(kwargs) -> psycopg.Connection:
 # Download
 # ---------------------------------------------------------------------------
 
-def chunk_text(text: str, chunk_size: int) -> list[tuple[str, str | None]]:
-    """Split text into chunks, tracking the nearest chapter header."""
+# Строгая регулярка для проверки, что строка — это валидная римская цифра
+# (чтобы слова вроде "CIVIL" не распознавались как римское число)
+ROMAN_RE = re.compile(r'^M{0,4}(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3})$', re.IGNORECASE)
+
+
+def roman_to_int(s: str) -> int:
+    """Convert a valid Roman numeral to an integer."""
+    roman = {'I': 1, 'V': 5, 'X': 10, 'L': 50, 'C': 100, 'D': 500, 'M': 1000}
+    res, prev = 0, 0
+    for c in reversed(s.upper()):
+        curr = roman.get(c, 0)
+        if curr < prev:
+            res -= curr
+        else:
+            res += curr
+        prev = curr
+    return res
+
+
+def word_to_int(s: str) -> int | None:
+    """Convert English words (e.g., 'twenty-one') to an integer."""
+    units = {
+        "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+        "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+        "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14,
+        "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19
+    }
+    tens = {
+        "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50,
+        "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90
+    }
+    scales = {"hundred": 100, "thousand": 1000}
+
+    s = s.lower().replace("-", " ").strip()
+    if not s:
+        return None
+
+    words = s.split()
+    if not words:
+        return None
+
+    current = 0
+    result = 0
+
+    for word in words:
+        if word in units:
+            current += units[word]
+        elif word in tens:
+            current += tens[word]
+        elif word in scales:
+            current *= scales[word]
+            if word == "thousand":
+                result += current
+                current = 0
+        elif word == "and":
+            continue
+        else:
+            return None  # Слово не является числом (например, "Chapter The")
+
+    return result + current
+
+def chunk_text(text: str, chunk_size: int) -> list[tuple[str, str | None, int | None]]:
     if not text:
-        return [("", None)]
+        return [("", None, None)]
 
-    # Собираем позиции всех заголовков глав
-    chapter_positions = [(m.start(), m.group(0).strip()) for m in CHAPTER_RE.finditer(text)]
+    sections = _parser.parse(text)
 
-    def find_chapter(pos: int) -> str | None:
-        # Ищем последний заголовок перед позицией pos
-        current = None
-        for header_pos, header_title in chapter_positions:
+    def find_section(pos: int) -> tuple[str | None, int | None]:
+        current_title = None
+        current_num = None
+        for header_pos, header_title, header_num in sections:
             if header_pos > pos:
                 break
-            current = header_title
-        return current
+            current_title = header_title
+            current_num = header_num
+        return current_title, current_num
 
     chunks = []
     pos = 0
@@ -181,9 +244,10 @@ def chunk_text(text: str, chunk_size: int) -> list[tuple[str, str | None]]:
                 end = bp
 
         chunk_body = text[pos:end].strip()
-        chapter = find_chapter(pos)
-        chunks.append((chunk_body, chapter))
+        chapter, chap_num = find_section(pos)
+        chunks.append((chunk_body, chapter, chap_num))
         pos = end
+
     return chunks
 
 def download_to_csv(dataset_name, limit, chunk_size, header_path: Path, text_path: Path):
@@ -198,7 +262,7 @@ def download_to_csv(dataset_name, limit, chunk_size, header_path: Path, text_pat
         wh, wt = csv.writer(fh), csv.writer(ft)
         wh.writerow(["id", "title", "author"])
         # Добавили chapter в заголовок CSV
-        wt.writerow(["book_id", "chunk", "chapter", "text_chunk"])
+        wt.writerow(["book_id", "chunk", "chapter", "chap_num", "text_chunk"])
 
         for row in dataset.take(limit):
             books += 1
@@ -213,8 +277,8 @@ def download_to_csv(dataset_name, limit, chunk_size, header_path: Path, text_pat
             total_chunks += 1
 
             # chunk_text теперь возвращает кортежи (text, chapter)
-            for i, (chunk, chapter) in enumerate(chunk_text(text, chunk_size)):
-                wt.writerow([books, i, chapter or "", chunk])
+            for i, (chunk, chapter, chap_num) in enumerate(chunk_text(text, chunk_size)):
+                wt.writerow([books, i, chapter or "", chap_num or "", chunk])
                 total_chunks += 1
             if books % 100 == 0:
                 print(f"  {books}/{limit} books, {total_chunks} chunks")
@@ -239,7 +303,7 @@ def create_obj(conn, args) -> None:
         h_ex, t_ex = cur.fetchone()
 
         if (h_ex or t_ex) and not args.override:
-            print(f"Error: tables exist. Use --override.", file=sys.stderr)
+            print("Error: tables exist. Use --override.", file=sys.stderr)
             sys.exit(2)
 
         if h_ex or t_ex:
@@ -266,6 +330,7 @@ def create_obj(conn, args) -> None:
             "  book_id INT NOT NULL REFERENCES {}(id) ON DELETE CASCADE,"
             "  chunk INT NOT NULL,"
             "  chapter TEXT,"
+            "  chap_num INT,"
             "  text_chunk TEXT,"
             "  tsv tsvector GENERATED ALWAYS AS ("
             "    to_tsvector({}::regconfig, coalesce(text_chunk,''))"
@@ -300,7 +365,7 @@ def load_to_postgres(conn, header_path, text_path) -> None:
         with open(text_path, "r", encoding="utf-8") as f:
             next(f)
             with cur.copy(sql.SQL(
-                "COPY {} (book_id, chunk, chapter, text_chunk) FROM STDIN WITH (FORMAT csv)"
+                "COPY {} (book_id, chunk, chapter, chap_num, text_chunk) FROM STDIN WITH (FORMAT csv)"
             ).format(text_tbl)) as c:
                 for line in f:
                     c.write(line)
@@ -387,7 +452,7 @@ def main() -> None:
             if args.use_cache or args.keep_csv:
                 print(f"✓ CSVs kept in {storage_dir}")
                 if not is_cached:
-                    print(f"  → Next run with --use-cache will skip download")
+                    print("  → Next run with --use-cache will skip download")
             else:
                 for p in (header_path, text_path):
                     if p.exists():

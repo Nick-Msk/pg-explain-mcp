@@ -1,5 +1,6 @@
 from fastmcp import FastMCP
-from tools.book_search import register_tools, set_connection
+
+from tools.book_search import register_tools
 
 # Optional: explicit connection config instead of PG* env vars
 # set_connection(host="127.0.0.1", dbname="postgres")
