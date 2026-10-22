@@ -2,33 +2,22 @@
 """
 Download text from Hugging Face and load it into PostgreSQL.
 
-Schema (fixed names):
-  book_header (id, title, author, tsv)          tsv weights: title=A, author=B
-  book_text   (book_id, chunk, text_chunk, tsv) tsv weight:  text=D
+Pipeline:
+  1. load_from_origin  -> storage/raw_books_<limit>.jsonl (raw text with \n)
+  2. process_to_csv    -> storage/books_<limit>_chunk<size>_*.csv (chunked)
+  3. load_to_db        -> book_header / book_text in PostgreSQL
 
-Search with find_expression() — see utils/find_expression.sql.
-
-Caching:
-  CSVs are stored in --storage-dir as
-    books_<limit>_chunk<chunk_size>_header.csv
-    books_<limit>_chunk<chunk_size>_text.csv
-
-  --use-cache   reuse them if present; keep them after download otherwise
-  --keep-csv    keep them after download, but don't use them automatically
-
-  Changing --limit or --chunk-size invalidates the cache (different filename).
+Caches are independent: changing chunk-size or chapter-parsing logic only
+re-runs step 2; changing --limit re-runs step 1.
 """
 
 import argparse
 import csv
+import json
 import os
 import re
 import sys
 from pathlib import Path
-
-from chapter_parser import ChapterParser
-
-_parser = ChapterParser()
 
 try:
     from datasets import load_dataset
@@ -43,12 +32,7 @@ except ImportError:
     print("Error: 'psycopg' not installed. Run: uv pip install 'psycopg[binary]'", file=sys.stderr)
     sys.exit(1)
 
-CHAPTER_RE = re.compile(
-    r'^\s*(?:'
-    r'CHAPTER|Chapter|ГЛАВА|Глава|PART|Part|Часть|ЧАСТЬ'
-    r')\s+(?:[IVXLCDM]+|\d+)\b.*$',
-    re.MULTILINE
-)
+from chapter_parser import ChapterParser
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
 DEFAULT_STORAGE_DIR = SCRIPT_DIR / "storage"
@@ -57,14 +41,12 @@ DEFAULT_CHUNK_SIZE = 4096
 HEADER_TABLE = "book_header"
 TEXT_TABLE   = "book_text"
 
+_parser = ChapterParser()
 
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
 
-def parse_args() -> argparse.Namespace:
+def parse_args():
     p = argparse.ArgumentParser(
-        description="Download text from HF and load into PostgreSQL (book_header / book_text).",
+        description="Download books from HF and load into PostgreSQL.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     g_db = p.add_argument_group("PostgreSQL connection")
@@ -75,167 +57,102 @@ def parse_args() -> argparse.Namespace:
     g_db.add_argument("--password", default=os.environ.get("PGPASSWORD"))
 
     g_src = p.add_argument_group("Data source")
-    g_src.add_argument("--limit",      type=int, default=1000,
-                       help="Number of books (default: 1000)")
+    g_src.add_argument("--limit",      type=int, default=1000)
     g_src.add_argument("--dataset",    default="AdhyanshVerma/pg-en")
     g_src.add_argument("--chunk-size", type=int, default=DEFAULT_CHUNK_SIZE)
     g_src.add_argument("--storage-dir", default=str(DEFAULT_STORAGE_DIR))
 
     g_cache = p.add_argument_group("Caching")
     g_cache.add_argument("--use-cache", action="store_true",
-                         help="Reuse CSVs from storage-dir if present; keep them after download")
+                         help="Reuse files from storage-dir if present")
     g_cache.add_argument("--keep-csv", action="store_true",
-                         help="Keep CSVs after download (usable by a later --use-cache run)")
+                         help="Keep generated CSVs after load")
 
     g_proc = p.add_argument_group("Processing")
     g_proc.add_argument("--fts-config", default="english")
-    g_proc.add_argument("--override", action="store_true",
-                        help="Drop book_header/book_text if they exist")
+    g_proc.add_argument("--override", action="store_true")
     g_proc.add_argument("--skip-load",    action="store_true")
     g_proc.add_argument("--skip-process", action="store_true")
-    g_proc.add_argument("--with-gin", action="store_true",
-                        help="Create GIN indexes on book_header.tsv and book_text.tsv")
+    g_proc.add_argument("--with-gin", action="store_true")
+
+    g_src.add_argument("--chunk-size", type=int, default=DEFAULT_CHUNK_SIZE,
+                        help=f"Chars per text chunk (default: {DEFAULT_CHUNK_SIZE})")
     return p.parse_args()
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _size_str(path: Path) -> str:
-    n = path.stat().st_size
-    for unit in ("B", "KB", "MB", "GB"):
-        if n < 1024:
-            return f"{n:.1f} {unit}"
-        n /= 1024
-    return f"{n:.1f} TB"
-
-
-def csv_paths(storage_dir: Path, limit: int, chunk_size: int) -> tuple[Path, Path]:
-    """Predictable CSV filenames so cache lookups are deterministic."""
-    stem = f"books_{limit}_chunk{chunk_size}"
-    return (storage_dir / f"{stem}_header.csv",
-            storage_dir / f"{stem}_text.csv")
-
-
-# ---------------------------------------------------------------------------
-# Connection
-# ---------------------------------------------------------------------------
-
 def build_conn_kwargs(args) -> dict:
-    kwargs = {"host": args.host, "port": args.port,
-              "dbname": args.dbname, "user": args.user}
+    kw = {"host": args.host, "port": args.port, "dbname": args.dbname, "user": args.user}
     if args.password:
-        kwargs["password"] = args.password
-    return kwargs
+        kw["password"] = args.password
+    return kw
 
 
 def connect(kwargs) -> psycopg.Connection:
-    print(f"→ Connecting to postgres://{kwargs['user']}@{kwargs['host']}:"
-          f"{kwargs['port']}/{kwargs['dbname']}")
+    print(f"→ Connecting to postgres://{kwargs['user']}@{kwargs['host']}:{kwargs['port']}/{kwargs['dbname']}")
     try:
         conn = psycopg.connect(**kwargs)
     except psycopg.OperationalError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
-
-    try:
-        with conn.cursor() as cur:
-            cur.execute("SELECT current_database(), version()")
-            db, ver = cur.fetchone()
-        conn.rollback()
-    except Exception as e:
-        print(f"Error: connection check failed: {e}", file=sys.stderr)
-        sys.exit(1)
-
-    print(f"✓ Connected to '{db}' — {ver.split(',')[0]}")
+    conn.rollback()  # clear any implicit txn
+    print("✓ Connected.")
     return conn
 
 
 # ---------------------------------------------------------------------------
-# Download
+# Step 1: load_from_origin
 # ---------------------------------------------------------------------------
 
-# Строгая регулярка для проверки, что строка — это валидная римская цифра
-# (чтобы слова вроде "CIVIL" не распознавались как римское число)
-ROMAN_RE = re.compile(r'^M{0,4}(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3})$', re.IGNORECASE)
+def load_from_origin(dataset_name: str, limit: int, path: Path) -> None:
+    """Download raw text from HF to JSONL (preserves newlines for parsing)."""
+    print(f"→ Streaming {limit} books from '{dataset_name}' ...")
+    print("  (this may take a while; the result is cached for future runs)")
+    dataset = load_dataset(dataset_name, split="train", streaming=True)
+
+    count = 0
+    with open(path, "w", encoding="utf-8") as f:
+        for row in dataset.take(limit):
+            count += 1
+            title  = (row.get("title")  or "").replace("\x00", "")
+            author = (row.get("author") or "").replace("\x00", "")
+            text   = (row.get("text")   or "").replace("\x00", "")
+
+            # В JSONL сохраняем \n как есть, чтобы парсер глав потом работал
+            record = {"id": count, "title": title, "author": author, "text": text}
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+            if count % 100 == 0:
+                print(f"  {count}/{limit} books downloaded")
+
+    print(f"✓ Downloaded {count} books to {path.name}")
 
 
-def roman_to_int(s: str) -> int:
-    """Convert a valid Roman numeral to an integer."""
-    roman = {'I': 1, 'V': 5, 'X': 10, 'L': 50, 'C': 100, 'D': 500, 'M': 1000}
-    res, prev = 0, 0
-    for c in reversed(s.upper()):
-        curr = roman.get(c, 0)
-        if curr < prev:
-            res -= curr
-        else:
-            res += curr
-        prev = curr
-    return res
+# ---------------------------------------------------------------------------
+# Step 2: process_to_csv
+# ---------------------------------------------------------------------------
 
-
-def word_to_int(s: str) -> int | None:
-    """Convert English words (e.g., 'twenty-one') to an integer."""
-    units = {
-        "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
-        "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
-        "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14,
-        "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19
-    }
-    tens = {
-        "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50,
-        "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90
-    }
-    scales = {"hundred": 100, "thousand": 1000}
-
-    s = s.lower().replace("-", " ").strip()
-    if not s:
-        return None
-
-    words = s.split()
-    if not words:
-        return None
-
-    current = 0
-    result = 0
-
-    for word in words:
-        if word in units:
-            current += units[word]
-        elif word in tens:
-            current += tens[word]
-        elif word in scales:
-            current *= scales[word]
-            if word == "thousand":
-                result += current
-                current = 0
-        elif word == "and":
-            continue
-        else:
-            return None  # Слово не является числом (например, "Chapter The")
-
-    return result + current
-
-def chunk_text(text: str, chunk_size: int) -> list[tuple[str, str | None, int | None]]:
+def _split_text(text: str, chunk_size: int) -> list[tuple[str, str | None, int | None]]:
+    """Normalize whitespace, parse chapters, split into chunks."""
     if not text:
         return [("", None, None)]
+
+    # Нормализуем пробелы, но СОХРАНЯЕМ \n (иначе парсер глав сломается)
+    text = re.sub(r'[^\S\n]+', ' ', text)
+    text = re.sub(r'\n{2,}', '\n', text)
+    text = text.strip()
 
     sections = _parser.parse(text)
 
     def find_section(pos: int) -> tuple[str | None, int | None]:
-        current_title = None
-        current_num = None
+        current_title, current_num = None, None
         for header_pos, header_title, header_num in sections:
             if header_pos > pos:
                 break
-            current_title = header_title
-            current_num = header_num
+            current_title, current_num = header_title, header_num
         return current_title, current_num
 
     chunks = []
-    pos = 0
-    n = len(text)
+    pos, n = 0, len(text)
     while pos < n:
         end = min(pos + chunk_size, n)
         if end < n:
@@ -250,59 +167,51 @@ def chunk_text(text: str, chunk_size: int) -> list[tuple[str, str | None, int | 
 
     return chunks
 
-def download_to_csv(dataset_name, limit, chunk_size, header_path: Path, text_path: Path):
-    print(f"→ Streaming {limit} books from '{dataset_name}' ...")
-    print("  (this can take a while; use --use-cache on the next run)")
-    dataset = load_dataset(dataset_name, split="train", streaming=True)
 
-    books, total_chunks = 0, 0
+def process_to_csv(raw_path: Path, chunk_size: int, header_path: Path, text_path: Path) -> None:
+    """Read raw JSONL, parse chapters, chunk, write two CSVs."""
+    print(f"→ Processing {raw_path.name} into chunks (size {chunk_size}) ...")
 
-    with open(header_path, "w", newline="", encoding="utf-8") as fh, \
-         open(text_path,   "w", newline="", encoding="utf-8") as ft:
-        wh, wt = csv.writer(fh), csv.writer(ft)
+    total_books, total_chunks = 0, 0
+    with open(raw_path, encoding="utf-8") as f_raw, \
+         open(header_path, "w", newline="", encoding="utf-8") as f_h, \
+         open(text_path, "w", newline="", encoding="utf-8") as f_t:
+
+        wh, wt = csv.writer(f_h), csv.writer(f_t)
         wh.writerow(["id", "title", "author"])
-        # Добавили chapter в заголовок CSV
         wt.writerow(["book_id", "chunk", "chapter", "chap_num", "text_chunk"])
 
-        for row in dataset.take(limit):
-            books += 1
-            title  = (row.get("title")  or "").replace("\x00", "")
-            author = (row.get("author") or "").replace("\x00", "")
-            text   = (row.get("text")   or "").replace("\x00", "")
-            text = re.sub(r'[^\S\n]+', ' ', text)  # \S — не-пробельный символ, \n исключен
-            text = re.sub(r'\n{2,}', '\n', text)   # убираем множественные пустые строки
-            text = text.strip()
+        for line in f_raw:
+            total_books += 1
+            rec = json.loads(line)
+            book_id = rec["id"]
 
-            wh.writerow([books, title, author])
-            total_chunks += 1
+            wh.writerow([book_id, rec["title"], rec["author"]])
 
-            # chunk_text теперь возвращает кортежи (text, chapter)
-            for i, (chunk, chapter, chap_num) in enumerate(chunk_text(text, chunk_size)):
-                wt.writerow([books, i, chapter or "", chap_num or "", chunk])
+            chunks = _split_text(rec["text"], chunk_size)
+            for i, (chunk, chapter, chap_num) in enumerate(chunks):
+                wt.writerow([book_id, i, chapter or "", chap_num or "", chunk])
                 total_chunks += 1
-            if books % 100 == 0:
-                print(f"  {books}/{limit} books, {total_chunks} chunks")
 
-    print(f"✓ Downloaded {books} books, {total_chunks} chunks")
-    print(f"  header: {header_path.name} ({_size_str(header_path)})")
-    print(f"  text:   {text_path.name} ({_size_str(text_path)})")
-    return books, total_chunks
+    print(f"✓ Processed {total_books} books into {total_chunks} chunks")
+    print(f"  header: {header_path.name}")
+    print(f"  text:   {text_path.name}")
+
 
 # ---------------------------------------------------------------------------
-# Schema
+# Step 3: load_to_db
 # ---------------------------------------------------------------------------
 
-def create_obj(conn, args) -> None:
+def create_obj(conn, fts_config: str, override: bool):
     header_tbl = sql.Identifier(HEADER_TABLE)
     text_tbl   = sql.Identifier(TEXT_TABLE)
-    fts        = sql.Literal(args.fts_config)
+    fts        = sql.Literal(fts_config)
 
     with conn.cursor() as cur:
-        cur.execute("SELECT to_regclass(%s), to_regclass(%s)",
-                    (HEADER_TABLE, TEXT_TABLE))
+        cur.execute("SELECT to_regclass(%s), to_regclass(%s)", (HEADER_TABLE, TEXT_TABLE))
         h_ex, t_ex = cur.fetchone()
 
-        if (h_ex or t_ex) and not args.override:
+        if (h_ex or t_ex) and not override:
             print("Error: tables exist. Use --override.", file=sys.stderr)
             sys.exit(2)
 
@@ -311,7 +220,7 @@ def create_obj(conn, args) -> None:
             cur.execute(sql.SQL("DROP TABLE IF EXISTS {} CASCADE").format(text_tbl))
             cur.execute(sql.SQL("DROP TABLE IF EXISTS {} CASCADE").format(header_tbl))
 
-        print(f"→ Creating {HEADER_TABLE} (title=A, author=B weights) ...")
+        print(f"→ Creating {HEADER_TABLE} ...")
         cur.execute(sql.SQL(
             "CREATE TABLE {} ("
             "  id SERIAL PRIMARY KEY,"
@@ -324,7 +233,7 @@ def create_obj(conn, args) -> None:
             ")"
         ).format(header_tbl, fts, fts))
 
-        print(f"→ Creating {TEXT_TABLE} (PK: book_id, chunk) ...")
+        print(f"→ Creating {TEXT_TABLE} ...")
         cur.execute(sql.SQL(
             "CREATE TABLE {} ("
             "  book_id INT NOT NULL REFERENCES {}(id) ON DELETE CASCADE,"
@@ -343,11 +252,7 @@ def create_obj(conn, args) -> None:
     print("✓ Schema created.")
 
 
-# ---------------------------------------------------------------------------
-# Load
-# ---------------------------------------------------------------------------
-
-def load_to_postgres(conn, header_path, text_path) -> None:
+def load_to_db(conn, header_path: Path, text_path: Path):
     header_tbl = sql.Identifier(HEADER_TABLE)
     text_tbl   = sql.Identifier(TEXT_TABLE)
 
@@ -355,18 +260,14 @@ def load_to_postgres(conn, header_path, text_path) -> None:
         print("→ COPY headers ...")
         with open(header_path, encoding="utf-8") as f:
             next(f)
-            with cur.copy(sql.SQL(
-                "COPY {} (id, title, author) FROM STDIN WITH (FORMAT csv)"
-            ).format(header_tbl)) as c:
+            with cur.copy(sql.SQL("COPY {} (id, title, author) FROM STDIN WITH (FORMAT csv)").format(header_tbl)) as c:
                 for line in f:
                     c.write(line)
 
         print("→ COPY text chunks ...")
         with open(text_path, encoding="utf-8") as f:
             next(f)
-            with cur.copy(sql.SQL(
-                "COPY {} (book_id, chunk, chapter, chap_num, text_chunk) FROM STDIN WITH (FORMAT csv)"
-            ).format(text_tbl)) as c:
+            with cur.copy(sql.SQL("COPY {} (book_id, chunk, chapter, chap_num, text_chunk) FROM STDIN WITH (FORMAT csv)").format(text_tbl)) as c:
                 for line in f:
                     c.write(line)
 
@@ -378,32 +279,21 @@ def load_to_postgres(conn, header_path, text_path) -> None:
     print("✓ Load committed.")
 
 
-# ---------------------------------------------------------------------------
-# Process
-# ---------------------------------------------------------------------------
-
-def process_data(conn_kwargs, args) -> None:
-    if args.with_gin:
+def process_data(conn_kwargs, with_gin: bool):
+    if with_gin:
         conn = psycopg.connect(**conn_kwargs)
         try:
             with conn.cursor() as cur:
-                print(f"→ Creating GIN index on {HEADER_TABLE}.tsv ...")
-                cur.execute(sql.SQL(
-                    "CREATE INDEX IF NOT EXISTS {} ON {} USING GIN (tsv)"
-                ).format(sql.Identifier(f"idx_{HEADER_TABLE}_tsv"),
-                         sql.Identifier(HEADER_TABLE)))
-
-                print(f"→ Creating GIN index on {TEXT_TABLE}.tsv ...")
-                cur.execute(sql.SQL(
-                    "CREATE INDEX IF NOT EXISTS {} ON {} USING GIN (tsv)"
-                ).format(sql.Identifier(f"idx_{TEXT_TABLE}_tsv"),
-                         sql.Identifier(TEXT_TABLE)))
+                print("→ Creating GIN indexes ...")
+                cur.execute(sql.SQL("CREATE INDEX IF NOT EXISTS {} ON {} USING GIN (tsv)").format(
+                    sql.Identifier(f"idx_{HEADER_TABLE}_tsv"), sql.Identifier(HEADER_TABLE)))
+                cur.execute(sql.SQL("CREATE INDEX IF NOT EXISTS {} ON {} USING GIN (tsv)").format(
+                    sql.Identifier(f"idx_{TEXT_TABLE}_tsv"), sql.Identifier(TEXT_TABLE)))
             conn.commit()
         finally:
             conn.close()
         print("✓ GIN indexes created.")
 
-    # VACUUM requires a fresh autocommit connection
     vac_conn = psycopg.connect(**conn_kwargs, autocommit=True)
     try:
         with vac_conn.cursor() as cur:
@@ -419,7 +309,7 @@ def process_data(conn_kwargs, args) -> None:
 # Orchestration
 # ---------------------------------------------------------------------------
 
-def main() -> None:
+def main():
     args = parse_args()
 
     conn_kwargs = build_conn_kwargs(args)
@@ -428,39 +318,37 @@ def main() -> None:
     storage_dir = Path(args.storage_dir)
     storage_dir.mkdir(parents=True, exist_ok=True)
 
-    header_path, text_path = csv_paths(storage_dir, args.limit, args.chunk_size)
+    # Пути для кэшей
+    raw_path = storage_dir / f"raw_books_{args.limit}.jsonl"
+    header_path = storage_dir / f"books_{args.limit}_chunk{args.chunk_size}_header.csv"
+    text_path   = storage_dir / f"books_{args.limit}_chunk{args.chunk_size}_text.csv"
 
     try:
         if not args.skip_load:
-            create_obj(conn, args)
-
-            is_cached = args.use_cache and header_path.exists() and text_path.exists()
-
-            if is_cached:
-                print(f"✓ Using cached CSVs from {storage_dir}:")
-                print(f"  header: {header_path.name} ({_size_str(header_path)})")
-                print(f"  text:   {text_path.name} ({_size_str(text_path)})")
+            # Шаг 1: Скачивание
+            if args.use_cache and raw_path.exists():
+                print(f"✓ Using cached raw text: {raw_path.name}")
             else:
-                if args.use_cache:
-                    print(f"→ No cache for limit={args.limit}, chunk_size={args.chunk_size}; downloading ...")
-                download_to_csv(args.dataset, args.limit, args.chunk_size,
-                                header_path, text_path)
+                load_from_origin(args.dataset, args.limit, raw_path)
 
-            load_to_postgres(conn, header_path, text_path)
-
-            # Cache management
-            if args.use_cache or args.keep_csv:
-                print(f"✓ CSVs kept in {storage_dir}")
-                if not is_cached:
-                    print("  → Next run with --use-cache will skip download")
+            # Шаг 2: Обработка
+            if args.use_cache and header_path.exists() and text_path.exists():
+                print(f"✓ Using processed CSVs for chunk_size={args.chunk_size}")
             else:
+                process_to_csv(raw_path, args.chunk_size, header_path, text_path)
+
+            # Шаг 3: Заливка в БД
+            create_obj(conn, args.fts_config, args.override)
+            load_to_db(conn, header_path, text_path)
+
+            if not (args.use_cache or args.keep_csv):
                 for p in (header_path, text_path):
                     if p.exists():
                         p.unlink()
-                print("  (CSVs removed; use --use-cache or --keep-csv to keep them)")
+                print("  (CSVs removed; use --use-cache to keep them)")
 
         if not args.skip_process:
-            process_data(conn_kwargs, args)
+            process_data(conn_kwargs, args.with_gin)
     finally:
         conn.close()
 
@@ -472,4 +360,3 @@ if __name__ == "__main__":
     sys.stdout.flush()
     sys.stderr.flush()
     os._exit(0)
-
