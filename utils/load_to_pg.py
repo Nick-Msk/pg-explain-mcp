@@ -205,7 +205,9 @@ def download_to_csv(dataset_name, limit, chunk_size, header_path: Path, text_pat
             title  = (row.get("title")  or "").replace("\x00", "")
             author = (row.get("author") or "").replace("\x00", "")
             text   = (row.get("text")   or "").replace("\x00", "")
-            text   = " ".join(text.split())
+            text = re.sub(r'[^\S\n]+', ' ', text)  # \S — не-пробельный символ, \n исключен
+            text = re.sub(r'\n{2,}', '\n', text)   # убираем множественные пустые строки
+            text = text.strip()
 
             wh.writerow([books, title, author])
             total_chunks += 1
