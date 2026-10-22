@@ -19,7 +19,9 @@ RETURNS TABLE (
     book_id  int,
     chunk    int,
     title    text,
-    author   text
+    author   text,
+    chapter  text,
+    chap_num int
 )
 LANGUAGE sql STABLE
 AS $$
@@ -27,7 +29,9 @@ AS $$
         bt.book_id,
         bt.chunk,
         COALESCE(bh.title, '<NO TITLE>') AS title,
-        bh.author
+        bh.authora,
+        bt.chapter,
+        bt.chap_num
     FROM book_text bt
     JOIN book_header bh ON bh.id = bt.book_id
     WHERE bt.tsv @@ websearch_to_tsquery(p_fts_config, p_query)
@@ -83,6 +87,7 @@ RETURNS TABLE (
     author   text,
     snippet  text,
     chunks   int[],
+    chap_nums int[],
     rank     real
 )
 LANGUAGE sql STABLE
@@ -91,13 +96,14 @@ AS $$
         SELECT websearch_to_tsquery(p_fts_config, p_query) AS query
     ),
     text_hits AS (
-        SELECT bt.book_id, bt.chunk
+        SELECT bt.book_id, bt.chunk, bt.chap_num
         FROM book_text bt, q
         WHERE bt.tsv @@ q.query
     ),
     grouped AS (
         SELECT book_id,
                array_agg(chunk ORDER BY chunk) AS chunks,
+               array_agg(chap_num ORDER BY chunk) AS chap_nums,
                count(*)::int AS n_chunks
         FROM text_hits
         GROUP BY book_id
@@ -117,12 +123,13 @@ AS $$
             COALESCE(h.author, '')          AS author,
             COALESCE(g.chunks, ARRAY[]::int[]) AS chunks,
             COALESCE(g.n_chunks, 0)         AS n_chunks,
+            COALESCE(g.chap_nums, 0)          as chap_nums,
             COALESCE(h.hr, 0)::real         AS hr
         FROM header_ranked h
         FULL OUTER JOIN grouped g ON h.book_id = g.book_id
     ),
     top_n AS (
-        SELECT book_id, title, author, chunks,
+        SELECT book_id, title, author, chunks, chap_nums,
                (hr * p_header_weight + LEAST(n_chunks, 10) * 0.1)::real AS rank
         FROM candidates
         ORDER BY rank DESC
@@ -151,6 +158,7 @@ AS $$
                  ))
         END,
         t.chunks,
+        t.chap_nums,
         t.rank
     FROM top_n t, q
     ORDER BY t.rank DESC;
@@ -190,7 +198,9 @@ RETURNS TABLE (
     title    text,
     author   text,
     n_chunks int,
-    chunks   int[]
+    chunks   int[],
+    chapters text[],
+    chap_nums int[]
 )
 LANGUAGE sql STABLE
 AS $$
@@ -199,7 +209,9 @@ AS $$
         COALESCE(bh.title, '<NO TITLE>') AS title,
         bh.author,
         COUNT(*)::int AS n_chunks,
-        array_agg(bt.chunk ORDER BY bt.chunk) AS chunks
+        array_agg(bt.chunk ORDER BY bt.chunk) AS chunks,
+        array_agg(bt.chapter ORDER BY bt.chunk) AS chapters,
+        array_agg(bt.chap_num ORDER BY bt.chunk) AS chap_nums
     FROM book_text bt
     JOIN book_header bh ON bh.id = bt.book_id
     WHERE bt.tsv @@ websearch_to_tsquery(p_fts_config, p_query)

@@ -107,21 +107,25 @@ def search_books(
     offset: int = 0,
     unique_books: bool = False,
 ) -> list[dict[str, Any]]:
-    """Fast full-text search (~10ms).
+    """Fast full-text search over book chunks (~10ms).
 
     Two modes:
 
     - unique_books=False (default): one row per matching CHUNK.
-      Fields: book_id, chunk, title, author.
+      Fields: book_id, chunk, title, author, chapter, chap_num.
       A book that mentions "war" on 20 pages appears 20 times.
-      Use when you want to find every mention, or to grab many snippets.
+      Use when you want every mention, or to grab many snippets.
 
     - unique_books=True: one row per BOOK.
-      Fields: book_id, title, author, n_chunks, chunks.
+      Fields: book_id, title, author, n_chunks, chunks, chapters, chap_nums.
       `n_chunks` = how many chunks matched (relevance indicator).
-      `chunks` = array of matching chunk numbers.
+      `chunks` / `chapters` / `chap_nums` = parallel arrays, indexed together.
       Ordered by n_chunks DESC — most-mentioned books first.
       Use when showing a result list to the user.
+
+    `chapter` and `chap_num` are populated only for books with parseable
+    section headers (e.g. "CHAPTER 5", "Book 01 Genesis"). About 38% of
+    the corpus has them; for the rest both fields are None.
 
     Query syntax (Google-like):
       war peace               -> both words (AND)
@@ -136,7 +140,13 @@ def search_books(
         unique_books: One row per book instead of per chunk.
 
     Returns:
-        See description above.
+        unique_books=False:
+            [{"book_id": int, "chunk": int, "title": str, "author": str,
+              "chapter": str | None, "chap_num": int | None}, ...]
+        unique_books=True:
+            [{"book_id": int, "title": str, "author": str,
+              "n_chunks": int, "chunks": list[int],
+              "chapters": list[str | None], "chap_nums": list[int | None]}, ...]
     """
     limit = max(1, min(limit, 500))
     with _cursor() as cur:

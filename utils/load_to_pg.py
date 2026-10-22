@@ -353,7 +353,7 @@ def load_to_postgres(conn, header_path, text_path) -> None:
 
     with conn.cursor() as cur:
         print("→ COPY headers ...")
-        with open(header_path, "r", encoding="utf-8") as f:
+        with open(header_path, encoding="utf-8") as f:
             next(f)
             with cur.copy(sql.SQL(
                 "COPY {} (id, title, author) FROM STDIN WITH (FORMAT csv)"
@@ -362,7 +362,7 @@ def load_to_postgres(conn, header_path, text_path) -> None:
                     c.write(line)
 
         print("→ COPY text chunks ...")
-        with open(text_path, "r", encoding="utf-8") as f:
+        with open(text_path, encoding="utf-8") as f:
             next(f)
             with cur.copy(sql.SQL(
                 "COPY {} (book_id, chunk, chapter, chap_num, text_chunk) FROM STDIN WITH (FORMAT csv)"

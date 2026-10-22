@@ -84,7 +84,7 @@ def main():
                 if count % 100 == 0:
                     print(f"  Saved {count}/{args.limit} records...")
 
-    except IOError as e:
+    except OSError as e:
         print(f"Failed to write to file: {e}")
         sys.exit(1)
 
