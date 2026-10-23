@@ -23,21 +23,29 @@ logging.basicConfig(
 )
 logger = logging.getLogger("yt-parser")
 
-
-SCHEMA_SQL = """
-CREATE TABLE IF NOT EXISTS yt_source (
-    id            SERIAL PRIMARY KEY,
-    ytlink        TEXT NOT NULL UNIQUE,
-    metadata      JSONB,
-    contain       TEXT,
-    status        TEXT NOT NULL DEFAULT 'pending'
-                  CHECK (status IN ('pending', 'processing', 'ok', 'failed')),
-    error_message TEXT,
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-"""
-
+SCHEMA_STATEMENTS = [
+    """
+    CREATE TABLE IF NOT EXISTS yt_source (
+        id            SERIAL PRIMARY KEY,
+        ytlink        TEXT NOT NULL UNIQUE,
+        metadata      JSONB,
+        contain       TEXT,
+        status        TEXT NOT NULL DEFAULT 'pending'
+                      CHECK (status IN ('pending', 'processing', 'ok', 'failed')),
+        error_message TEXT,
+        created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS yt_tags (
+        tag         TEXT PRIMARY KEY,
+        description TEXT,
+        weight      NUMERIC NOT NULL DEFAULT 1.0,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    """,
+]
 
 # --- CLI ---------------------------------------------------------------------
 
@@ -117,13 +125,12 @@ def connect(args: argparse.Namespace) -> psycopg.Connection:
         kwargs["password"] = args.password
     return psycopg.connect(**kwargs)
 
-
 def ensure_schema(conn: psycopg.Connection) -> None:
     with conn.cursor() as cur:
-        cur.execute(SCHEMA_SQL)
+        for stmt in SCHEMA_STATEMENTS:
+            cur.execute(stmt)
     conn.commit()
-    logger.info("Схема проверена (CREATE TABLE IF NOT EXISTS).")
-
+    logger.info("Схема проверена (yt_source, yt_tags).")
 
 def save_to_db(
     conn: psycopg.Connection,
@@ -165,6 +172,14 @@ def process_video(conn: psycopg.Connection, raw_url: str) -> None:
         save_to_db(conn, url, metadata, None, status="failed", error=str(e))
         return
 
+    # Теги — отдельно и не фатально
+    try:
+        tags = extract_tags(metadata)
+        inserted = save_tags(conn, tags)
+        logger.info(f"Тегов извлечено: {len(tags)}, новых в БД: {inserted}.")
+    except Exception as e:
+        logger.warning(f"Не удалось сохранить теги: {e}")
+
     try:
         transcript = fetch_transcript(video_id)
         logger.info(f"Транскрипт получен ({len(transcript)} символов).")
@@ -175,6 +190,26 @@ def process_video(conn: psycopg.Connection, raw_url: str) -> None:
 
     save_to_db(conn, url, metadata, transcript, status="ok")
 
+def extract_tags(metadata: dict) -> list[str]:
+    """Возвращает список тегов из метаданных yt-dlp (без пустых и не-строк)."""
+    raw = metadata.get("tags") or []
+    return [t.strip() for t in raw if isinstance(t, str) and t.strip()]
+
+
+def save_tags(conn: psycopg.Connection, tags: list[str]) -> int:
+    """Вставляет теги в yt_tags. Возвращает число фактически новых записей."""
+    if not tags:
+        return 0
+    sql = """
+        INSERT INTO yt_tags (tag, description, weight)
+        VALUES (%s, NULL, 1.0)
+        ON CONFLICT (tag) DO NOTHING;
+    """
+    with conn.cursor() as cur:
+        cur.executemany(sql, [(t,) for t in tags])
+        inserted = cur.rowcount  # с DO NOTHING считает только реально вставленные
+    conn.commit()
+    return inserted
 
 def main() -> int:
     args = parse_args()
