@@ -24,6 +24,11 @@ logging.basicConfig(
 logger = logging.getLogger("yt-parser")
 
 SCHEMA_STATEMENTS = [
+    # --- 1. Расширения (должны идти первыми) ---
+    "CREATE EXTENSION IF NOT EXISTS vector",
+    "CREATE EXTENSION IF NOT EXISTS pg_trgm",
+
+    # --- 2. Базовые таблицы ---
     """
     CREATE TABLE IF NOT EXISTS yt_source (
         id            SERIAL PRIMARY KEY,
@@ -45,6 +50,41 @@ SCHEMA_STATEMENTS = [
         created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
     );
     """,
+
+    # --- 3. Колонки поиска на yt_source ---
+    "ALTER TABLE yt_source ADD COLUMN IF NOT EXISTS embedding vector(1024)",
+    "ALTER TABLE yt_source ADD COLUMN IF NOT EXISTS contain_tsv tsvector "
+    "GENERATED ALWAYS AS (to_tsvector('russian', coalesce(contain, ''))) STORED",
+
+    # --- 4. Индексы на yt_source ---
+    "CREATE INDEX IF NOT EXISTS yt_source_embedding_hnsw_idx "
+    "ON yt_source USING hnsw (embedding vector_cosine_ops)",
+    "CREATE INDEX IF NOT EXISTS yt_source_contain_tsv_idx "
+    "ON yt_source USING gin (contain_tsv)",
+    "CREATE INDEX IF NOT EXISTS yt_source_contain_trgm_idx "
+    "ON yt_source USING gin (contain gin_trgm_ops)",
+
+    # --- 5. Таблица чанков ---
+    """
+    CREATE TABLE IF NOT EXISTS yt_chunks (
+        id          BIGSERIAL PRIMARY KEY,
+        source_id   INT  NOT NULL REFERENCES yt_source(id) ON DELETE CASCADE,
+        chunk_no    INT  NOT NULL,
+        content     TEXT NOT NULL,
+        content_tsv tsvector GENERATED ALWAYS AS (to_tsvector('russian', content)) STORED,
+        embedding   vector(1024),
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        UNIQUE (source_id, chunk_no)
+    );
+    """,
+
+    # --- 6. Индексы на yt_chunks ---
+    "CREATE INDEX IF NOT EXISTS yt_chunks_tsv_idx "
+    "ON yt_chunks USING gin (content_tsv)",
+    "CREATE INDEX IF NOT EXISTS yt_chunks_embedding_hnsw_idx "
+    "ON yt_chunks USING hnsw (embedding vector_cosine_ops)",
+    "CREATE INDEX IF NOT EXISTS yt_chunks_content_trgm_idx "
+    "ON yt_chunks USING gin (content gin_trgm_ops)",
 ]
 
 # --- CLI ---------------------------------------------------------------------
@@ -126,11 +166,16 @@ def connect(args: argparse.Namespace) -> psycopg.Connection:
     return psycopg.connect(**kwargs)
 
 def ensure_schema(conn: psycopg.Connection) -> None:
-    with conn.cursor() as cur:
-        for stmt in SCHEMA_STATEMENTS:
-            cur.execute(stmt)
-    conn.commit()
-    logger.info("Схема проверена (yt_source, yt_tags).")
+    for stmt in SCHEMA_STATEMENTS:
+        label = stmt.strip().split("\n", 1)[0][:60]
+        try:
+            with conn.cursor() as cur:
+                cur.execute(stmt)
+            conn.commit()
+        except psycopg.Error as e:
+            conn.rollback()
+            logger.warning(f"[skip] {label}…: {e}")
+    logger.info("Схема проверена.")
 
 def save_to_db(
     conn: psycopg.Connection,
@@ -139,7 +184,7 @@ def save_to_db(
     contain: str | None,
     status: str = "ok",
     error: str | None = None,
-) -> None:
+) -> int:
     sql = """
         INSERT INTO yt_source (ytlink, metadata, contain, status, error_message, updated_at)
         VALUES (%s, %s, %s, %s, %s, now())
@@ -148,13 +193,15 @@ def save_to_db(
             contain       = EXCLUDED.contain,
             status        = EXCLUDED.status,
             error_message = EXCLUDED.error_message,
-            updated_at    = now();
+            updated_at    = now()
+        RETURNING id;
     """
     with conn.cursor() as cur:
         cur.execute(sql, (ytlink, Jsonb(metadata), contain, status, error))
+        row = cur.fetchone()
     conn.commit()
-    logger.info(f"Запись для {ytlink} сохранена (status='{status}').")
-
+    assert row is not None
+    return row[0]
 
 # --- Основной пайплайн -------------------------------------------------------
 
@@ -188,7 +235,12 @@ def process_video(conn: psycopg.Connection, raw_url: str) -> None:
         save_to_db(conn, url, metadata, None, status="failed", error=str(e))
         return
 
-    save_to_db(conn, url, metadata, transcript, status="ok")
+    source_id = save_to_db(conn, url, metadata, transcript, status="ok")
+    try:
+        n = save_chunks(conn, source_id, transcript, max_bytes=4096)
+        logger.info(f"Чанков сохранено: {n}.")
+    except psycopg.Error as e:
+        logger.warning(f"Не удалось сохранить чанки: {e}")
 
 def extract_tags(metadata: dict) -> list[str]:
     """Возвращает список тегов из метаданных yt-dlp (без пустых и не-строк)."""
@@ -211,6 +263,65 @@ def save_tags(conn: psycopg.Connection, tags: list[str]) -> int:
     conn.commit()
     return inserted
 
+def chunk_text(text: str, max_bytes: int = 4096) -> list[str]:
+    """
+    Режет текст на куски ≤ max_bytes (UTF-8), не разрывая слов.
+    Слова разделяются пробелом; если слово в хвосте не влезает — целиком уходит
+    в следующий чанк. Слово длиннее max_bytes (не встречается в норме)
+    становится отдельным чанком с warning.
+    """
+    if not text:
+        return []
+
+    words = text.split()
+    chunks: list[str] = []
+    buf: list[str] = []
+    buf_bytes = 0
+
+    for w in words:
+        w_bytes = len(w.encode("utf-8"))
+        if w_bytes > max_bytes:
+            logger.warning(
+                "Слово длиннее %d байт (%d) — режем принудительно: %.40s…",
+                max_bytes, w_bytes, w,
+            )
+            if buf:
+                chunks.append(" ".join(buf))
+                buf, buf_bytes = [], 0
+            chunks.append(w)
+            continue
+
+        sep = 0 if not buf else 1  # один пробел-разделитель
+        if buf and buf_bytes + sep + w_bytes > max_bytes:
+            chunks.append(" ".join(buf))
+            buf = [w]
+            buf_bytes = w_bytes
+        else:
+            buf.append(w)
+            buf_bytes += sep + w_bytes
+
+    if buf:
+        chunks.append(" ".join(buf))
+    return chunks
+
+def save_chunks(
+    conn: psycopg.Connection,
+    source_id: int,
+    contain: str,
+    max_bytes: int = 4096,
+) -> int:
+    chunks = chunk_text(contain, max_bytes=max_bytes)
+    if not chunks:
+        return 0
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM yt_chunks WHERE source_id = %s", (source_id,))
+        cur.executemany(
+            "INSERT INTO yt_chunks (source_id, chunk_no, content) VALUES (%s, %s, %s)",
+            [(source_id, i, c) for i, c in enumerate(chunks)],
+        )
+    conn.commit()
+    return len(chunks)
+
 def main() -> int:
     args = parse_args()
     try:
@@ -221,7 +332,6 @@ def main() -> int:
         logger.error(f"Ошибка PostgreSQL: {e}")
         return 1
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

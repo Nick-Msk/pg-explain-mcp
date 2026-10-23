@@ -6,6 +6,7 @@ requires-python = ">=3.11"
 dependencies = [
     "psycopg[binary]>=3.3.6",
     "ruff>=0.17.2",
+    "sentence-transformers>=6.2.0",
     "youtube-transcript-api>=1.2.4",
     "yt-dlp>=2026.10.21",
 ]
