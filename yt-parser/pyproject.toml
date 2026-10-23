@@ -1,0 +1,15 @@
+[project]
+name = "yt-parser"
+version = "0.1.0"
+description = "YouTube → PostgreSQL pipeline for parsing videos"
+requires-python = ">=3.11"
+dependencies = [
+    "psycopg[binary]>=3.3.6",
+    "ruff>=0.17.2",
+    "youtube-transcript-api>=1.2.4",
+    "yt-dlp>=2026.10.21",
+]
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]   # базовые ошибки, pyflakes, сортировка импортов, pyupgrade, bugbear
+ignore = ["E501"]                      # длина строки — не контролируем
+
