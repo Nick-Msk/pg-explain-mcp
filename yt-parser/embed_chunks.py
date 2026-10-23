@@ -135,7 +135,7 @@ def embed_chunks(
         convert_to_numpy=True,
     )
 
-    save_chunk_embeddings(conn, list(zip(ids, vectors.tolist())))
+    save_chunk_embeddings(conn, list(zip(ids, vectors.tolist(), strict=True)))
     logger.info(f"Записано эмбеддингов в yt_chunks: {len(rows)}.")
     return len(rows)
 

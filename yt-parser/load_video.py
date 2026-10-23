@@ -11,6 +11,7 @@ import logging
 import os
 import re
 import sys
+import time
 
 import psycopg
 import yt_dlp
@@ -97,14 +98,24 @@ def parse_args() -> argparse.Namespace:
                    help="Хост/IP PostgreSQL (по умолчанию: localhost)")
     p.add_argument("-d", "--dbname", default="ytparse",
                    help="Имя базы данных (по умолчанию: ytparse)")
-    p.add_argument("-y", "--url", required=True,
-                   help="Ссылка на YouTube-видео (можно без https://)")
     p.add_argument("-u", "--user", default=os.getenv("PGUSER"),
                    help="Пользователь PostgreSQL (по умолчанию: из PGUSER или текущий OS-пользователь)")
     p.add_argument("-w", "--password", default=os.getenv("PGPASSWORD"),
                    help="Пароль PostgreSQL (по умолчанию: из PGPASSWORD)")
     p.add_argument("--port", type=int, default=int(os.getenv("PGPORT", "5432")),
                    help="Порт PostgreSQL (по умолчанию: 5432 или PGPORT)")
+    p.add_argument("-y", "--url", default=None,
+                   help="Ссылка на YouTube-видео (обязательно без -p)")
+    p.add_argument("-p", "--process", action="store_true",
+                   help="Обработать очередь: забрать все yt_source со status='pending'")
+    p.add_argument("--watch", action="store_true",
+                   help="С -p: не выходить, а ждать новые pending (поллинг)")
+    p.add_argument("--poll-interval", type=int, default=10,
+                   help="Интервал опроса в --watch, сек (по умолчанию: 10)")
+    p.add_argument("--batch-size", type=int, default=10,
+                   help="Сколько записей брать за один цикл (по умолчанию: 10)")
+    p.add_argument("--recover", action="store_true",
+                   help="С -p: вернуть 'processing' → 'pending' (зависшие >30 мин)")
     return p.parse_args()
 
 
@@ -322,12 +333,93 @@ def save_chunks(
     conn.commit()
     return len(chunks)
 
+
+def recover_stuck(conn: psycopg.Connection, timeout_min: int = 30) -> int:
+    """'processing' → 'pending' для записей, зависших дольше timeout_min."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE yt_source
+            SET status='pending', updated_at=now()
+            WHERE status='processing'
+              AND updated_at < now() - make_interval(mins => %s)
+            """,
+            (timeout_min,),
+        )
+        n = cur.rowcount
+    conn.commit()
+    if n:
+        logger.info(f"Восстановлено зависших 'processing': {n}")
+    return n
+
+
+def claim_pending(conn: psycopg.Connection, limit: int) -> list[tuple[int, str]]:
+    """Атомарно забирает до limit 'pending' → 'processing' и возвращает их."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE yt_source
+            SET status='processing', updated_at=now()
+            WHERE id IN (
+                SELECT id FROM yt_source
+                WHERE status='pending'
+                ORDER BY created_at
+                LIMIT %s
+                FOR UPDATE SKIP LOCKED
+            )
+            RETURNING id, ytlink
+            """,
+            (limit,),
+        )
+        rows = cur.fetchall()
+    conn.commit()
+    return rows
+
+
+def mark_failed(conn: psycopg.Connection, source_id: int, error: str) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE yt_source SET status='failed', error_message=%s, updated_at=now() WHERE id=%s",
+            (error, source_id),
+        )
+    conn.commit()
+
+
+def process_queue(conn: psycopg.Connection, args: argparse.Namespace) -> None:
+    if args.recover:
+        recover_stuck(conn)
+
+    while True:
+        batch = claim_pending(conn, args.batch_size)
+        if not batch:
+            if args.watch:
+                logger.info(f"Очередь пуста, ждём {args.poll_interval}с...")
+                time.sleep(args.poll_interval)
+                continue
+            logger.info("Очередь пуста, выходим.")
+            break
+
+        logger.info(f"Взято из очереди: {len(batch)}.")
+        for source_id, ytlink in batch:
+            logger.info(f"[id={source_id}] {ytlink}")
+            try:
+                process_video(conn, ytlink)   # upsert заменит status='processing' на 'ok'
+            except Exception as e:
+                logger.exception(f"[id={source_id}] упало: {e}")
+                mark_failed(conn, source_id, str(e))
+
 def main() -> int:
     args = parse_args()
+    if not args.process and not args.url:
+        logger.error("Укажите -y URL или -p (обработать очередь).")
+        return 2
     try:
         with connect(args) as conn:
             ensure_schema(conn)
-            process_video(conn, args.url)
+            if args.process:
+                process_queue(conn, args)
+            else:
+                process_video(conn, args.url)
     except psycopg.Error as e:
         logger.error(f"Ошибка PostgreSQL: {e}")
         return 1
