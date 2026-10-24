@@ -28,9 +28,6 @@ SCHEMA_STATEMENTS = [
         ytlink        TEXT NOT NULL UNIQUE,
         metadata      JSONB,
         contain       TEXT,
-        status        TEXT NOT NULL DEFAULT 'pending'
-                      CHECK (status IN ('pending', 'processing', 'ok', 'failed')),
-        error_message TEXT,
         created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
         updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
     );
@@ -101,6 +98,20 @@ SCHEMA_STATEMENTS = [
         reasons JSONB,
         created_at TIMESTAMPTZ DEFAULT now()
     );
+    """,
+    # 7. State machine statuses
+    """
+    CREATE TABLE IF NOT EXISTS yt_status (
+        source_id   INT PRIMARY KEY REFERENCES yt_source(id) ON DELETE CASCADE,
+        status      TEXT NOT NULL DEFAULT 'added'
+                    CHECK (status IN (
+                        'added', 'process_load', 'loaded', 'failed_load',
+                        'process_embed', 'embedded', 'failed_embedded',
+                        'process_solution', 'solution', 'failed_solution'
+                    )),
+        comment     TEXT,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
     """
 ]
 
@@ -116,4 +127,57 @@ def ensure_schema(conn: psycopg.Connection) -> None:
             conn.rollback()
             logger.warning(f"[skip] {label}…: {e}")
     logger.info("Схема БД проверена/создана.")
+
+def claim_by_status(conn: psycopg.Connection, from_status: str, to_status: str, limit: int) -> list[int]:
+    """Атомарно переводит до limit записей из from_status в to_status."""
+    with conn.cursor() as cur:
+        cur.execute("""
+            UPDATE yt_status
+            SET status = %s, updated_at = now()
+            WHERE source_id IN (
+                SELECT source_id FROM yt_status
+                WHERE status = %s
+                ORDER BY updated_at
+                FOR UPDATE SKIP LOCKED
+                LIMIT %s
+            )
+            RETURNING source_id
+        """, (to_status, from_status, limit))
+        rows = cur.fetchall()
+    conn.commit()
+    return [r[0] for r in rows]
+
+
+def recover_stuck(conn: psycopg.Connection, timeout_min: int = 30) -> dict[str, int]:
+    """Откатывает 'process_*', зависшие дольше timeout_min, в предыдущий статус."""
+    rollback = {
+        'process_load':     'added',
+        'process_embed':    'loaded',
+        'process_solution': 'embedded',
+    }
+    result = {}
+    with conn.cursor() as cur:
+        for from_s, to_s in rollback.items():
+            cur.execute("""
+                UPDATE yt_status
+                SET status = %s, updated_at = now(),
+                    comment = 'recovered (timeout)'
+                WHERE status = %s
+                  AND updated_at < now() - make_interval(mins => %s)
+            """, (to_s, from_s, timeout_min))
+            n = cur.rowcount
+            if n:
+                result[from_s] = n
+    conn.commit()
+    return result
+
+
+def set_status(conn: psycopg.Connection, source_id: int, status: str, comment: str | None = None) -> None:
+    with conn.cursor() as cur:
+        cur.execute("""
+            UPDATE yt_status
+            SET status = %s, comment = %s, updated_at = now()
+            WHERE source_id = %s
+        """, (status, comment, source_id))
+    conn.commit()
 

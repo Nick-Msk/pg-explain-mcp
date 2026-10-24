@@ -12,9 +12,19 @@ import argparse
 import logging
 import os
 import sys
+import time
 
 import psycopg
 from sentence_transformers import SentenceTransformer
+
+from src.db import (
+    claim_by_status,
+    connect,
+    ensure_schema,
+    get_db_dsn,
+    recover_stuck,
+    set_status,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -58,15 +68,6 @@ def parse_args() -> argparse.Namespace:
 
 
 # --- Подключение и модель ----------------------------------------------------
-
-def connect(args: argparse.Namespace) -> psycopg.Connection:
-    kwargs = {"host": args.host, "port": args.port, "dbname": args.dbname}
-    if args.user:
-        kwargs["user"] = args.user
-    if args.password:
-        kwargs["password"] = args.password
-    return psycopg.connect(**kwargs)
-
 
 def build_model(name: str, device: str | None) -> SentenceTransformer:
     logger.info(f"Загрузка модели: {name} (device={device or 'auto'})")
@@ -139,6 +140,82 @@ def embed_chunks(
     logger.info(f"Записано эмбеддингов в yt_chunks: {len(rows)}.")
     return len(rows)
 
+def embed_one_source(conn, model, sid: int, args) -> None:
+    """Считает эмбеддинги для всех чанков одного видео, у которых их еще нет."""
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT id, content FROM yt_chunks
+            WHERE source_id = %s AND embedding IS NULL
+            ORDER BY chunk_no
+        """, (sid,))
+        rows = cur.fetchall()
+
+    if not rows:
+        return
+
+    prefix = passage_prefix(args.model)
+    ids = [r[0] for r in rows]
+    texts = [f"{prefix}{r[1]}" for r in rows]
+
+    vectors = model.encode(
+        texts,
+        batch_size=args.batch_size,
+        normalize_embeddings=True,
+        show_progress_bar=False,
+        convert_to_numpy=True,
+    )
+
+    with conn.cursor() as cur:
+        cur.executemany(
+            "UPDATE yt_chunks SET embedding = %s WHERE id = %s",
+            [(vec.tolist(), chunk_id) for chunk_id, vec in zip(ids, vectors, strict=True)]
+        )
+    conn.commit()
+
+
+def process_embed_queue(conn, args, model) -> None:
+    recover_stuck(conn)
+
+    while True:
+        ids = claim_by_status(conn, 'loaded', 'process_embed', args.batch_size)
+        if not ids:
+            if args.watch:
+                time.sleep(args.poll_interval)
+                recover_stuck(conn)
+                continue
+            break
+
+        for sid in ids:
+            try:
+                embed_one_source(conn, model, sid, args)
+                if source_fully_embedded(conn, sid):
+                    update_source_embedding(conn, sid)
+                    set_status(conn, sid, 'embedded')
+                else:
+                    # какой-то чанк упал — оставляем в 'loaded', чтобы при следующем прогоне доделать
+                    set_status(conn, sid, 'loaded', comment='partial chunks embedded')
+            except Exception as e:
+                logger.exception(f"[source_id={sid}] embed crashed: {e}")
+                set_status(conn, sid, 'failed_embedded', comment=str(e)[:500])
+
+def source_fully_embedded(conn, sid) -> bool:
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT
+              EXISTS(SELECT 1 FROM yt_chunks WHERE source_id=%s)
+              AND NOT EXISTS(SELECT 1 FROM yt_chunks WHERE source_id=%s AND embedding IS NULL)
+        """, (sid, sid))
+        return cur.fetchone()[0]
+
+def update_source_embedding(conn, sid) -> None:
+    with conn.cursor() as cur:
+        cur.execute("""
+            UPDATE yt_source SET embedding = sub.avg_emb, updated_at = now()
+            FROM (SELECT AVG(embedding)::vector(1024) AS avg_emb FROM yt_chunks WHERE source_id=%s) sub
+            WHERE id = %s
+        """, (sid, sid))
+    conn.commit()
+
 
 # --- Эмбеддинг документа (усреднение чанков) ---------------------------------
 
@@ -171,27 +248,83 @@ def recompute_source_embeddings(conn: psycopg.Connection, force: bool) -> int:
     logger.info(f"Обновлено yt_source.embedding: {updated}.")
     return updated
 
+# --- Legacy режим (глобальный поиск чанков) ----------------------------------
+
+def process_legacy(conn: psycopg.Connection, args: argparse.Namespace, model) -> None:
+    sql = "SELECT id, content FROM yt_chunks"
+    if not args.force:
+        sql += " WHERE embedding IS NULL"
+    sql += " ORDER BY source_id, chunk_no"
+    if args.limit:
+        sql += f" LIMIT {int(args.limit)}"
+
+    with conn.cursor() as cur:
+        cur.execute(sql)
+        rows = cur.fetchall()
+
+    if not rows:
+        logger.info("Нет чанков для обработки.")
+        return
+
+    logger.info(f"Чанков к обработке: {len(rows)}.")
+    prefix = passage_prefix(args.model)
+    ids = [r[0] for r in rows]
+    texts = [f"{prefix}{r[1]}" for r in rows]
+
+    vectors = model.encode(
+        texts,
+        batch_size=args.batch_size,
+        normalize_embeddings=True,
+        show_progress_bar=True,
+        convert_to_numpy=True,
+    )
+
+    with conn.cursor() as cur:
+        cur.executemany(
+            "UPDATE yt_chunks SET embedding = %s WHERE id = %s",
+            [(vec.tolist(), chunk_id) for chunk_id, vec in zip(ids, vectors, strict=True)]
+        )
+    conn.commit()
+    logger.info(f"Записано эмбеддингов: {len(rows)}.")
+
+    # Обновляем средние для тех источников, где всё посчитано
+    with conn.cursor() as cur:
+        cur.execute("""
+            UPDATE yt_source s SET embedding = sub.avg_emb, updated_at = now()
+            FROM (
+                SELECT source_id, AVG(embedding)::vector(1024) AS avg_emb
+                FROM yt_chunks
+                GROUP BY source_id
+                HAVING COUNT(*) FILTER (WHERE embedding IS NULL) = 0
+            ) sub
+            WHERE s.id = sub.source_id
+        """)
+    conn.commit()
 
 # --- main --------------------------------------------------------------------
 
 def main() -> int:
     args = parse_args()
+
     try:
         model = build_model(args.model, args.device)
     except Exception as e:
         logger.error(f"Не удалось загрузить модель: {e}")
         return 1
 
+    dsn = get_db_dsn(args.host, args.dbname, args.user, args.password, args.port)
     try:
-        with connect(args) as conn:
-            n = embed_chunks(model, conn, args)
-            if n and not args.skip_source:
-                recompute_source_embeddings(conn, force=args.force)
+        with connect(dsn) as conn:
+            ensure_schema(conn)
+            if args.process:
+                process_embed_queue(conn, args, model)
+            else:
+                process_legacy(conn, args, model)
     except psycopg.Error as e:
         logger.error(f"Ошибка PostgreSQL: {e}")
         return 1
-    return 0
 
+    return 0
 
 if __name__ == "__main__":
     sys.exit(main())

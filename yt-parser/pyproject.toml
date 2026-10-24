@@ -18,3 +18,19 @@ dependencies = [
 select = ["E", "F", "I", "UP", "B"]   # базовые ошибки, pyflakes, сортировка импортов, pyupgrade, bugbear
 ignore = ["E501"]                      # длина строки — не контролируем
 
+[project.scripts]
+yt-load    = "src.load_video:main"
+yt-embed   = "src.embed_chunks:main"
+yt-llm     = "src.exec_llm:main"
+yt-enqueue = "src.enqueue_api:app"
+
+[tool.uv]
+package = true
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+

@@ -18,7 +18,15 @@ import yt_dlp
 from psycopg.types.json import Jsonb
 from youtube_transcript_api import YouTubeTranscriptApi
 
-from src.db import connect, ensure_schema, get_db_dsn
+# Импортируем всё нужное из нашего модуля БД
+from src.db import (
+    claim_by_status,
+    connect,
+    ensure_schema,
+    get_db_dsn,
+    recover_stuck,
+    set_status,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -26,49 +34,29 @@ logging.basicConfig(
 )
 logger = logging.getLogger("yt-parser")
 
-
-# --- CLI ---------------------------------------------------------------------
-
-def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(
-        description="Загружает метаданные и транскрипт YouTube-видео в PostgreSQL (таблица yt_source)."
-    )
-    p.add_argument("-l", "--host", default="localhost",
-                   help="Хост/IP PostgreSQL (по умолчанию: localhost)")
-    p.add_argument("-d", "--dbname", default="ytparse",
-                   help="Имя базы данных (по умолчанию: ytparse)")
-    p.add_argument("-u", "--user", default=os.getenv("PGUSER"),
-                   help="Пользователь PostgreSQL (по умолчанию: из PGUSER или текущий OS-пользователь)")
-    p.add_argument("-w", "--password", default=os.getenv("PGPASSWORD"),
-                   help="Пароль PostgreSQL (по умолчанию: из PGPASSWORD)")
-    p.add_argument("--port", type=int, default=int(os.getenv("PGPORT", "5432")),
-                   help="Порт PostgreSQL (по умолчанию: 5432 или PGPORT)")
-    p.add_argument("-y", "--url", default=None,
-                   help="Ссылка на YouTube-видео (обязательно без -p)")
-    p.add_argument("-p", "--process", action="store_true",
-                   help="Обработать очередь: забрать все yt_source со status='pending'")
-    p.add_argument("--watch", action="store_true",
-                   help="С -p: не выходить, а ждать новые pending (поллинг)")
-    p.add_argument("--poll-interval", type=int, default=10,
-                   help="Интервал опроса в --watch, сек (по умолчанию: 10)")
-    p.add_argument("--batch-size", type=int, default=10,
-                   help="Сколько записей брать за один цикл (по умолчанию: 10)")
-    p.add_argument("--recover", action="store_true",
-                   help="С -p: вернуть 'processing' → 'pending' (зависшие >30 мин)")
-    return p.parse_args()
-
-
 # --- Вспомогательные функции -------------------------------------------------
 
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="Загружает YouTube-видео в PostgreSQL.")
+    p.add_argument("-l", "--host", default="localhost")
+    p.add_argument("-d", "--dbname", default="ytparse")
+    p.add_argument("-u", "--user", default=os.getenv("PGUSER"))
+    p.add_argument("-w", "--password", default=os.getenv("PGPASSWORD"))
+    p.add_argument("--port", type=int, default=int(os.getenv("PGPORT", "5432")))
+
+    p.add_argument("-y", "--url", default=None, help="Ссылка на YouTube-видео")
+    p.add_argument("-p", "--process", action="store_true", help="Обработать очередь")
+    p.add_argument("--watch", action="store_true", help="Ждать новые видео")
+    p.add_argument("--poll-interval", type=int, default=10, help="Интервал опроса, сек")
+    p.add_argument("--batch-size", type=int, default=10, help="Сколько брать за раз")
+    return p.parse_args()
+
 def normalize_url(url: str) -> str:
-    """Дополняет URL схемой, если её нет."""
     if not url.startswith(("http://", "https://")):
         url = "https://" + url.lstrip("/")
     return url
 
-
 def extract_video_id(url: str) -> str:
-    """Достаёт 11-символьный video ID из URL."""
     patterns = [
         r"(?:v=|\/)([0-9A-Za-z_-]{11})(?:[&?]|$)",
         r"youtu\.be\/([0-9A-Za-z_-]{11})",
@@ -80,186 +68,110 @@ def extract_video_id(url: str) -> str:
             return m.group(1)
     raise ValueError(f"Не удалось извлечь video ID из URL: {url}")
 
-
 def fetch_metadata(url: str) -> dict:
-    """Извлекает метаданные видео через yt-dlp."""
-    ydl_opts = {
-        "skip_download": True,
-        "quiet": True,
-        "no_warnings": True,
-    }
+    ydl_opts = {"skip_download": True, "quiet": True, "no_warnings": True}
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=False)
         return ydl.sanitize_info(info)
 
-
 def fetch_transcript(video_id: str, languages: list[str] | None = None) -> str:
-    """Возвращает сплошной текст транскрипта (по умолчанию ru → en)."""
     languages = languages or ["ru", "en"]
     ytt_api = YouTubeTranscriptApi()
     fetched = ytt_api.fetch(video_id, languages=languages)
     return " ".join(snippet.text for snippet in fetched)
 
-
-# --- Работа с БД -------------------------------------------------------------
-
-def save_to_db(
-    conn: psycopg.Connection,
-    ytlink: str,
-    metadata: dict,
-    contain: str | None,
-    status: str = "ok",
-    error: str | None = None,
-) -> int:
-    sql = """
-        INSERT INTO yt_source (ytlink, metadata, contain, status, error_message, updated_at)
-        VALUES (%s, %s, %s, %s, %s, now())
-        ON CONFLICT (ytlink) DO UPDATE SET
-            metadata      = EXCLUDED.metadata,
-            contain       = EXCLUDED.contain,
-            status        = EXCLUDED.status,
-            error_message = EXCLUDED.error_message,
-            updated_at    = now()
-        RETURNING id;
-    """
-    with conn.cursor() as cur:
-        cur.execute(sql, (ytlink, Jsonb(metadata), contain, status, error))
-        row = cur.fetchone()
-    conn.commit()
-    assert row is not None
-    return row[0]
-
-# --- Основной пайплайн -------------------------------------------------------
-
-def process_video(conn: psycopg.Connection, raw_url: str) -> None:
-    url = normalize_url(raw_url)
-    video_id = extract_video_id(url)
-    logger.info(f"Обработка: {url} (video_id={video_id})")
-
-    metadata: dict = {}
-    try:
-        metadata = fetch_metadata(url)
-        logger.info("Метаданные извлечены.")
-    except Exception as e:
-        logger.error(f"Ошибка метаданных: {e}")
-        save_to_db(conn, url, metadata, None, status="failed", error=str(e))
-        return
-
-    channel_yt_id = metadata.get("channel_id")
-    channel_name = metadata.get("channel") or "Unknown"
-    channel_db_id = None
-    if channel_yt_id:
-        with conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO yt_channel (channel_id, name)
-                VALUES (%s, %s)
-                ON CONFLICT (channel_id) DO UPDATE SET name = EXCLUDED.name
-                RETURNING id
-            """, (channel_yt_id, channel_name))
-            channel_db_id = cur.fetchone()[0]
-        conn.commit()
-
-    # Теги — отдельно и не фатально
-    try:
-        tags = extract_tags(metadata)
-        inserted = save_tags(conn, tags)
-        logger.info(f"Тегов извлечено: {len(tags)}, новых в БД: {inserted}.")
-    except Exception as e:
-        logger.warning(f"Не удалось сохранить теги: {e}")
-
-    try:
-        transcript = fetch_transcript(video_id)
-        logger.info(f"Транскрипт получен ({len(transcript)} символов).")
-    except Exception as e:
-        logger.error(f"Ошибка транскрипта: {e}")
-        save_to_db(conn, url, metadata, None, status="failed", error=str(e))
-        return
-
-    source_id = save_to_db(conn, url, metadata, transcript, status="ok")
-    # try to map channel
-    # Привязываем видео к каналу
-    if channel_db_id and source_id:
-        with conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO yt_channel_vids (channel_id, source_id)
-                VALUES (%s, %s) ON CONFLICT DO NOTHING
-            """, (channel_db_id, source_id))
-        conn.commit()
-
-    try:
-        n = save_chunks(conn, source_id, transcript, max_bytes=4096)
-        logger.info(f"Чанков сохранено: {n}.")
-    except psycopg.Error as e:
-        logger.warning(f"Не удалось сохранить чанки: {e}")
-
-def extract_tags(metadata: dict) -> list[str]:
-    """Возвращает список тегов из метаданных yt-dlp (без пустых и не-строк)."""
-    raw = metadata.get("tags") or []
-    return [t.strip() for t in raw if isinstance(t, str) and t.strip()]
-
-
-def save_tags(conn: psycopg.Connection, tags: list[str]) -> int:
-    """Вставляет теги в yt_tags. Возвращает число фактически новых записей."""
-    if not tags:
-        return 0
-    sql = """
-        INSERT INTO yt_tags (tag, description, weight)
-        VALUES (%s, NULL, 1.0)
-        ON CONFLICT (tag) DO NOTHING;
-    """
-    with conn.cursor() as cur:
-        cur.executemany(sql, [(t,) for t in tags])
-        inserted = cur.rowcount  # с DO NOTHING считает только реально вставленные
-    conn.commit()
-    return inserted
-
 def chunk_text(text: str, max_bytes: int = 4096) -> list[str]:
-    """
-    Режет текст на куски ≤ max_bytes (UTF-8), не разрывая слов.
-    Слова разделяются пробелом; если слово в хвосте не влезает — целиком уходит
-    в следующий чанк. Слово длиннее max_bytes (не встречается в норме)
-    становится отдельным чанком с warning.
-    """
     if not text:
         return []
-
     words = text.split()
-    chunks: list[str] = []
-    buf: list[str] = []
-    buf_bytes = 0
-
+    chunks, buf, buf_bytes = [], [], 0
     for w in words:
         w_bytes = len(w.encode("utf-8"))
         if w_bytes > max_bytes:
-            logger.warning(
-                "Слово длиннее %d байт (%d) — режем принудительно: %.40s…",
-                max_bytes, w_bytes, w,
-            )
             if buf:
                 chunks.append(" ".join(buf))
                 buf, buf_bytes = [], 0
             chunks.append(w)
             continue
-
-        sep = 0 if not buf else 1  # один пробел-разделитель
+        sep = 0 if not buf else 1
         if buf and buf_bytes + sep + w_bytes > max_bytes:
             chunks.append(" ".join(buf))
-            buf = [w]
-            buf_bytes = w_bytes
+            buf, buf_bytes = [w], w_bytes
         else:
             buf.append(w)
             buf_bytes += sep + w_bytes
-
     if buf:
         chunks.append(" ".join(buf))
     return chunks
 
-def save_chunks(
-    conn: psycopg.Connection,
-    source_id: int,
-    contain: str,
-    max_bytes: int = 4096,
-) -> int:
+# --- Работа с БД -------------------------------------------------------------
+
+def upsert_source(conn: psycopg.Connection, ytlink: str, metadata: dict, contain: str | None) -> int:
+    """Сохраняет видео и гарантирует наличие yt_status."""
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO yt_source (ytlink, metadata, contain, updated_at)
+            VALUES (%s, %s, %s, now())
+            ON CONFLICT (ytlink) DO UPDATE SET
+                metadata   = EXCLUDED.metadata,
+                contain    = EXCLUDED.contain,
+                updated_at = now()
+            RETURNING id
+        """, (ytlink, Jsonb(metadata), contain))
+        source_id = cur.fetchone()[0]
+
+        cur.execute("""
+            INSERT INTO yt_status (source_id, status) VALUES (%s, 'added')
+            ON CONFLICT (source_id) DO NOTHING
+        """, (source_id,))
+    conn.commit()
+    return source_id
+
+def save_channel(conn: psycopg.Connection, source_id: int, metadata: dict) -> None:
+    channel_yt_id = metadata.get("channel_id")
+    if not channel_yt_id:
+        return
+    channel_name = metadata.get("channel") or "Unknown"
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO yt_channel (channel_id, name)
+            VALUES (%s, %s)
+            ON CONFLICT (channel_id) DO UPDATE SET name = EXCLUDED.name
+            RETURNING id
+        """, (channel_yt_id, channel_name))
+        channel_db_id = cur.fetchone()[0]
+
+        cur.execute("""
+            INSERT INTO yt_channel_vids (channel_id, source_id)
+            VALUES (%s, %s) ON CONFLICT DO NOTHING
+        """, (channel_db_id, source_id))
+    conn.commit()
+
+def extract_tags(metadata: dict) -> list[str]:
+    raw = metadata.get("tags") or []
+    return [t.strip() for t in raw if isinstance(t, str) and t.strip()]
+
+def save_tags(conn: psycopg.Connection, tags: list[str]) -> None:
+    if not tags:
+        return
+    with conn.cursor() as cur:
+        cur.executemany(
+            "INSERT INTO yt_tags (tag, description, weight) VALUES (%s, NULL, 1.0) ON CONFLICT (tag) DO NOTHING",
+            [(t,) for t in tags]
+        )
+    conn.commit()
+
+def link_source_tags(conn: psycopg.Connection, source_id: int, tags: list[str]) -> None:
+    if not tags:
+        return
+    with conn.cursor() as cur:
+        cur.executemany(
+            "INSERT INTO yt_source_tags (source_id, tag, weight) VALUES (%s, %s, 1.0) ON CONFLICT DO NOTHING",
+            [(source_id, t) for t in tags]
+        )
+    conn.commit()
+
+def save_chunks(conn: psycopg.Connection, source_id: int, contain: str, max_bytes: int = 4096) -> int:
     chunks = chunk_text(contain, max_bytes=max_bytes)
     if not chunks:
         return 0
@@ -272,80 +184,53 @@ def save_chunks(
     conn.commit()
     return len(chunks)
 
+# --- Пайплайн ----------------------------------------------------------------
 
-def recover_stuck(conn: psycopg.Connection, timeout_min: int = 30) -> int:
-    """'processing' → 'pending' для записей, зависших дольше timeout_min."""
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            UPDATE yt_source
-            SET status='pending', updated_at=now()
-            WHERE status='processing'
-              AND updated_at < now() - make_interval(mins => %s)
-            """,
-            (timeout_min,),
-        )
-        n = cur.rowcount
-    conn.commit()
-    if n:
-        logger.info(f"Восстановлено зависших 'processing': {n}")
-    return n
+def process_video(conn: psycopg.Connection, source_id: int, url: str) -> None:
+    video_id = extract_video_id(url)
+    logger.info(f"[source_id={source_id}] Загрузка: {url}")
 
+    try:
+        metadata = fetch_metadata(url)
+        tags = extract_tags(metadata)
+        transcript = fetch_transcript(video_id)
+    except Exception as e:
+        logger.error(f"[source_id={source_id}] load failed: {e}")
+        set_status(conn, source_id, 'failed_load', comment=str(e)[:500])
+        return
 
-def claim_pending(conn: psycopg.Connection, limit: int) -> list[tuple[int, str]]:
-    """Атомарно забирает до limit 'pending' → 'processing' и возвращает их."""
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            UPDATE yt_source
-            SET status='processing', updated_at=now()
-            WHERE id IN (
-                SELECT id FROM yt_source
-                WHERE status='pending'
-                ORDER BY created_at
-                LIMIT %s
-                FOR UPDATE SKIP LOCKED
-            )
-            RETURNING id, ytlink
-            """,
-            (limit,),
-        )
-        rows = cur.fetchall()
-    conn.commit()
-    return rows
+    sid = upsert_source(conn, url, metadata, transcript)
+    save_channel(conn, sid, metadata)
+    save_tags(conn, tags)
+    link_source_tags(conn, sid, tags)
 
-
-def mark_failed(conn: psycopg.Connection, source_id: int, error: str) -> None:
-    with conn.cursor() as cur:
-        cur.execute(
-            "UPDATE yt_source SET status='failed', error_message=%s, updated_at=now() WHERE id=%s",
-            (error, source_id),
-        )
-    conn.commit()
-
+    n_chunks = save_chunks(conn, sid, transcript)
+    set_status(conn, source_id, 'loaded')
+    logger.info(f"[source_id={source_id}] loaded ({n_chunks} chunks, {len(tags)} tags)")
 
 def process_queue(conn: psycopg.Connection, args: argparse.Namespace) -> None:
-    if args.recover:
-        recover_stuck(conn)
+    recover_stuck(conn)   # Сразу лечим зависших
 
     while True:
-        batch = claim_pending(conn, args.batch_size)
-        if not batch:
+        ids = claim_by_status(conn, 'added', 'process_load', args.batch_size)
+        if not ids:
             if args.watch:
                 logger.info(f"Очередь пуста, ждём {args.poll_interval}с...")
                 time.sleep(args.poll_interval)
+                recover_stuck(conn)
                 continue
-            logger.info("Очередь пуста, выходим.")
             break
 
-        logger.info(f"Взято из очереди: {len(batch)}.")
-        for source_id, ytlink in batch:
-            logger.info(f"[id={source_id}] {ytlink}")
+        logger.info(f"Взято из очереди: {len(ids)}.")
+        for sid in ids:
+            with conn.cursor() as cur:
+                cur.execute("SELECT ytlink FROM yt_source WHERE id = %s", (sid,))
+                url = cur.fetchone()[0]
             try:
-                process_video(conn, ytlink)   # upsert заменит status='processing' на 'ok'
+                process_video(conn, sid, url)
             except Exception as e:
-                logger.exception(f"[id={source_id}] упало: {e}")
-                mark_failed(conn, source_id, str(e))
+                logger.exception(f"[source_id={sid}] crashed: {e}")
+                set_status(conn, sid, 'failed_load', comment=str(e)[:500])
 
 def main() -> int:
     args = parse_args()
@@ -353,20 +238,21 @@ def main() -> int:
         logger.error("Укажите -y URL или -p (обработать очередь).")
         return 2
 
-    dsn = get_db_dsn(
-        host=args.host,
-        dbname=args.dbname,
-        user=args.user,
-        password=args.password,
-        port=args.port,
-    )
+    dsn = get_db_dsn(args.host, args.dbname, args.user, args.password, args.port)
     try:
         with connect(dsn) as conn:
             ensure_schema(conn)
             if args.process:
                 process_queue(conn, args)
             else:
-                process_video(conn, args.url)
+                url = normalize_url(args.url)
+                # Если грузим один URL, создаём для него yt_source и status
+                with conn.cursor() as cur:
+                    cur.execute("INSERT INTO yt_source (ytlink) VALUES (%s) ON CONFLICT (ytlink) DO UPDATE SET ytlink=EXCLUDED.ytlink RETURNING id", (url,))
+                    sid = cur.fetchone()[0]
+                    cur.execute("INSERT INTO yt_status (source_id, status) VALUES (%s, 'added') ON CONFLICT DO NOTHING", (sid,))
+                conn.commit()
+                process_video(conn, sid, url)
     except psycopg.Error as e:
         logger.error(f"Ошибка PostgreSQL: {e}")
         return 1
