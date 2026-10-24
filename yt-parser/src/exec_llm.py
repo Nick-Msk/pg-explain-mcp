@@ -13,7 +13,6 @@ import time
 import json_repair
 import psycopg
 from openai import OpenAI
-from psycopg.types.json import Jsonb
 
 # Импортируем всё нужное из нашего модуля БД
 from src.db import (
@@ -50,18 +49,43 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 def analyze_text(client: OpenAI, text: str, model: str) -> tuple[dict | None, str | None]:
-    prompt = f"""Ты — аналитик. Проанализируй текст интервью учителя.
-Верни СТРОГО валидный JSON без markdown-оберток.
-Поля:
-- age (int|null)
-- region (str|null)
-- salary (str|null)
-- status (str) - одно из: 'working', 'resigned', 'fired', 'in_thinking', 'unknown'
-- reasons (list[str])
-- raw_text (str) - краткая выжимка (2-3 предложения, без кавычек внутри)
+    prompt = f"""Проанализируй текст интервью учителя. Верни СТРОГО валидный JSON.
 
-Текст:
-{text[:12000]}"""
+    1. ОБЯЗАТЕЛЬНЫЕ ПАРАМЕТРЫ (ищи их в первую очередь, даже если они упомянуты косвенно, например "20 лет стажа" -> возраст можно вычислить, если сказано "начала работать в 20"):
+       - age: возраст (число) или null
+       - gender: пол ('male', 'female') или null
+       - region: город/регион или null
+       - salary: зарплата (текстом, как в видео) или null
+       - experience: стаж работы (текстом) или null
+       - subject: предмет, который преподает (математика, английский и т.д.) или null
+
+    2. ОБЩИЙ СТАТУС:
+       - status: одно из 'working', 'resigned', 'fired', 'in_thinking', 'unknown'
+       - raw_text: краткая выжимка (2-3 предложения)
+
+    3. СВОБОДНЫЕ АТРИБУТЫ (attributes):
+       Объект (словарь), где ключ — характеристика, значение — факт из текста. Добавляй сюда всё, что не вошло в обязательные параметры (например: "нагрузка": "25 часов", "тип_школы": "сельская", "отношение_к_директору": "негативное").
+
+    Формат ответа:
+    {{
+      "status": "resigned",
+      "raw_text": "Учительница ушла из-за низкой зарплаты.",
+      "age": 35,
+      "gender": "female",
+      "region": "Москва",
+      "salary": "30 000 руб",
+      "experience": "10 лет",
+      "subject": "физика",
+      "attributes": {{
+        "нагрузка": "28 часов",
+        "тип_школы": "обычная"
+      }}
+    }}
+
+    Если данных для поля нет — ставь null. Не выдумывай!
+
+    Текст:
+    {text[:12000]}"""
 
     max_retries = 3
     last_error = "Unknown error"
@@ -97,29 +121,6 @@ def analyze_text(client: OpenAI, text: str, model: str) -> tuple[dict | None, st
 
     # Если все 3 попытки провалились
     return None, f"Failed after {max_retries} attempts. Last error: {last_error}"
-
-def save_solution(conn: psycopg.Connection, source_id: int, channel_id: int | None, parsed: dict):
-    # Вытаскиваем выжимку, которую сгенерировала LLM
-    summary = parsed.get("raw_text") or parsed.get("summary") or ""
-
-    with conn.cursor() as cur:
-        cur.execute("""
-            INSERT INTO yt_solution (channel_id, source_id, raw_text, age, region, salary, status, reasons)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (source_id) DO UPDATE SET
-                channel_id = EXCLUDED.channel_id,
-                raw_text   = EXCLUDED.raw_text,
-                age        = EXCLUDED.age,
-                region     = EXCLUDED.region,
-                salary     = EXCLUDED.salary,
-                status     = EXCLUDED.status,
-                reasons    = EXCLUDED.reasons
-        """, (
-            channel_id, source_id, summary,
-            parsed.get("age"), parsed.get("region"), parsed.get("salary"),
-            parsed.get("status", "unknown"), Jsonb(parsed.get("reasons", []))
-        ))
-    conn.commit()
 
 def process_llm_queue(conn: psycopg.Connection, args: argparse.Namespace) -> None:
     recover_stuck(conn)
@@ -165,6 +166,41 @@ def process_llm_queue(conn: psycopg.Connection, args: argparse.Namespace) -> Non
                 logger.exception(f"[source_id={sid}] crashed: {e}")
                 conn.rollback()
                 set_status(conn, sid, 'failed_solution', comment=str(e)[:500])
+
+def save_solution(conn: psycopg.Connection, source_id: int, channel_id: int | None, parsed: dict):
+    summary = parsed.get("raw_text") or ""
+    status = parsed.get("status", "unknown")
+
+    # Собираем все базовые поля
+    attributes = {}
+    for key in ["age", "gender", "region", "salary", "experience", "subject"]:
+        if parsed.get(key) is not None:
+            attributes[key] = str(parsed[key])
+
+    # Добавляем свободные атрибуты
+    free_attrs = parsed.get("attributes", {})
+    for k, v in free_attrs.items():
+        if v:
+            attributes[k] = str(v)
+
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO yt_solution (channel_id, source_id, raw_text, status)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (source_id) DO UPDATE SET
+                channel_id = EXCLUDED.channel_id,
+                raw_text   = EXCLUDED.raw_text,
+                status     = EXCLUDED.status
+        """, (channel_id, source_id, summary, status))
+
+        cur.execute("DELETE FROM yt_attributes WHERE source_id = %s", (source_id,))
+
+        if attributes:
+            cur.executemany(
+                "INSERT INTO yt_attributes (source_id, attribute, value) VALUES (%s, %s, %s)",
+                [(source_id, k.strip(), v.strip()) for k, v in attributes.items() if v]
+            )
+    conn.commit()
 
 def main() -> int:
     args = parse_args()

@@ -120,7 +120,7 @@ SCHEMA_STATEMENTS = [
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
     );
     """,
-    # Автоматическое создание yt_status при вставке в yt_source
+    # 8. Автоматическое создание yt_status при вставке в yt_source
     """
     CREATE OR REPLACE FUNCTION auto_create_yt_status()
     RETURNS TRIGGER AS $$
@@ -136,11 +136,30 @@ SCHEMA_STATEMENTS = [
     AFTER INSERT ON yt_source
     FOR EACH ROW EXECUTE FUNCTION auto_create_yt_status();
     """,
-    # Бэкфилл для старых записей (у которых триггера еще не было)
+    # 9. attributes
+        """
+    CREATE TABLE IF NOT EXISTS yt_attributes (
+        source_id  INT NOT NULL REFERENCES yt_source(id) ON DELETE CASCADE,
+        attribute  TEXT NOT NULL,
+        value      TEXT NOT NULL,
+        PRIMARY KEY (source_id, attribute)
+    );
+    """,
     """
-    INSERT INTO yt_status (source_id, status)
-    SELECT id, 'added' FROM yt_source
-    ON CONFLICT (source_id) DO NOTHING;
+    CREATE OR REPLACE VIEW v_solution
+     AS
+     SELECT sol.source_id,
+        c.name AS channel_name,
+        s.ytlink,
+        sol.status AS teacher_status,
+        sol.raw_text,
+        ( SELECT jsonb_object_agg(a.attribute, a.value) AS jsonb_object_agg
+               FROM yt_attributes a
+              WHERE a.source_id = sol.source_id) AS attributes
+       FROM yt_solution sol
+         JOIN yt_source s ON s.id = sol.source_id
+     LEFT JOIN yt_channel_vids cv ON cv.source_id = s.id
+     LEFT JOIN yt_channel c ON c.id = cv.channel_id;
     """
 ]
 

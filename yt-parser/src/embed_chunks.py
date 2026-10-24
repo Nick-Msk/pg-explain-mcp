@@ -13,8 +13,9 @@ import logging
 import os
 import sys
 import time
-import transformers
+
 import psycopg
+import transformers
 from sentence_transformers import SentenceTransformer
 
 from src.db import (
