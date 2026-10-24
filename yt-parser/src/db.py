@@ -42,7 +42,14 @@ SCHEMA_STATEMENTS = [
         created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
     );
     """,
-
+    """
+    CREATE TABLE IF NOT EXISTS yt_source_tags (
+        source_id INT REFERENCES yt_source(id) ON DELETE CASCADE,
+        tag       TEXT REFERENCES yt_tags(tag) ON DELETE CASCADE,
+        weight    NUMERIC NOT NULL DEFAULT 1.0,
+        PRIMARY KEY (source_id, tag)
+    );
+    """,
     # 3. Индексы и колонки для yt_source
     "ALTER TABLE yt_source ADD COLUMN IF NOT EXISTS embedding vector(1024)",
     "ALTER TABLE yt_source ADD COLUMN IF NOT EXISTS contain_tsv tsvector GENERATED ALWAYS AS (to_tsvector('russian', coalesce(contain, ''))) STORED",
