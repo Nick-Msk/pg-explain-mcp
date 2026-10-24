@@ -115,7 +115,7 @@ def process_llm_queue(conn: psycopg.Connection, args: argparse.Namespace) -> Non
     client = OpenAI(base_url=args.lm_url, api_key="lm-studio", timeout=300.0)
 
     while True:
-        ids = claim_by_status(conn, 'embedded', 'process_solution', args.batch_size)
+        ids = claim_by_status(conn, 'embedded', 'process_solution', args.batch_size, actor='cli')
         if not ids:
             if args.watch:
                 logger.info(f"Очередь пуста, ждём {args.poll_interval}с...")
@@ -135,7 +135,7 @@ def process_llm_queue(conn: psycopg.Connection, args: argparse.Namespace) -> Non
                 """, (sid,))
                 row = cur.fetchone()
                 if not row or not row[0]:
-                    set_status(conn, sid, 'failed_solution', comment='No text found')
+                    set_status(conn, sid, 'failed_solution', comment='No text found', actor='cli')
                     continue
                 text, chan_id = row
 
@@ -143,7 +143,7 @@ def process_llm_queue(conn: psycopg.Connection, args: argparse.Namespace) -> Non
                 parsed, error_msg = analyze_text(client, text, args.lm_model)
 
                 if parsed is None:
-                    set_status(conn, sid, 'failed_solution', comment=error_msg[:500])
+                    set_status(conn, sid, 'failed_solution', comment=error_msg[:500], actor='cli')
                     logger.error(f"[source_id={sid}] failed: {error_msg}")
                     continue
 

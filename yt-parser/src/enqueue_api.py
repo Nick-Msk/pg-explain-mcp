@@ -42,27 +42,33 @@ def enqueue(req: EnqueueReq):
 
     with psycopg.connect(DB_DSN) as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO yt_source (ytlink, status)
-                VALUES (%s, 'pending')
+            cur.execute("SELECT set_config('app.actor', 'web', true)")
+
+            # Триггер сам создаст запись в yt_status
+            cur.execute("""
+                INSERT INTO yt_source (ytlink) VALUES (%s)
                 ON CONFLICT (ytlink) DO NOTHING
                 RETURNING id
-                """,
-                (url,),
-            )
+            """, (url,))
             row = cur.fetchone()
+
             if row:
+                source_id = row[0]
                 conn.commit()
-                return {"id": row[0], "status": "pending",
-                        "message": f"Добавлено в очередь (id={row[0]})"}
+                return {"id": source_id, "status": "added",
+                        "message": f"Добавлено в очередь (id={source_id})"}
 
-            cur.execute("SELECT id, status FROM yt_source WHERE ytlink = %s", (url,))
-            existing = cur.fetchone()
+            # Если видео уже было
+            cur.execute("""
+                SELECT s.id, COALESCE(st.status, 'added')
+                FROM yt_source s
+                LEFT JOIN yt_status st ON st.source_id = s.id
+                WHERE s.ytlink = %s
+            """, (url,))
+            sid, status = cur.fetchone()
         conn.commit()
-    return {"id": existing[0], "status": existing[1],
-            "message": f"Уже в БД: status={existing[1]}"}
-
+    return {"id": sid, "status": status,
+            "message": f"Уже в БД: status={status}"}
 
 @app.get("/health")
 def health():

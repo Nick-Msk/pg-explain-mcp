@@ -107,7 +107,6 @@ def chunk_text(text: str, max_bytes: int = 4096) -> list[str]:
 # --- Работа с БД -------------------------------------------------------------
 
 def upsert_source(conn: psycopg.Connection, ytlink: str, metadata: dict, contain: str | None) -> int:
-    """Сохраняет видео и гарантирует наличие yt_status."""
     with conn.cursor() as cur:
         cur.execute("""
             INSERT INTO yt_source (ytlink, metadata, contain, updated_at)
@@ -119,11 +118,7 @@ def upsert_source(conn: psycopg.Connection, ytlink: str, metadata: dict, contain
             RETURNING id
         """, (ytlink, Jsonb(metadata), contain))
         source_id = cur.fetchone()[0]
-
-        cur.execute("""
-            INSERT INTO yt_status (source_id, status) VALUES (%s, 'added')
-            ON CONFLICT (source_id) DO NOTHING
-        """, (source_id,))
+        # УДАЛИТЕ строку: INSERT INTO yt_status ...
     conn.commit()
     return source_id
 
@@ -205,14 +200,14 @@ def process_video(conn: psycopg.Connection, source_id: int, url: str) -> None:
     link_source_tags(conn, sid, tags)
 
     n_chunks = save_chunks(conn, sid, transcript)
-    set_status(conn, source_id, 'loaded')
+    set_status(conn, source_id, 'loaded', actor='cli')
     logger.info(f"[source_id={source_id}] loaded ({n_chunks} chunks, {len(tags)} tags)")
 
 def process_queue(conn: psycopg.Connection, args: argparse.Namespace) -> None:
     recover_stuck(conn)   # Сразу лечим зависших
 
     while True:
-        ids = claim_by_status(conn, 'added', 'process_load', args.batch_size)
+        ids = claim_by_status(conn, 'added', 'process_load', args.batch_size, actor='cli')
         if not ids:
             if args.watch:
                 logger.info(f"Очередь пуста, ждём {args.poll_interval}с...")
@@ -230,7 +225,7 @@ def process_queue(conn: psycopg.Connection, args: argparse.Namespace) -> None:
                 process_video(conn, sid, url)
             except Exception as e:
                 logger.exception(f"[source_id={sid}] crashed: {e}")
-                set_status(conn, sid, 'failed_load', comment=str(e)[:500])
+                set_status(conn, sid, 'failed_load', comment=str(e)[:500], actor='cli')
 
 def main() -> int:
     args = parse_args()
@@ -246,11 +241,14 @@ def main() -> int:
                 process_queue(conn, args)
             else:
                 url = normalize_url(args.url)
-                # Если грузим один URL, создаём для него yt_source и status
+                # Триггер сам создаст yt_status
                 with conn.cursor() as cur:
-                    cur.execute("INSERT INTO yt_source (ytlink) VALUES (%s) ON CONFLICT (ytlink) DO UPDATE SET ytlink=EXCLUDED.ytlink RETURNING id", (url,))
+                    cur.execute("""
+                        INSERT INTO yt_source (ytlink) VALUES (%s) 
+                        ON CONFLICT (ytlink) DO UPDATE SET ytlink=EXCLUDED.ytlink 
+                        RETURNING id
+                    """, (url,))
                     sid = cur.fetchone()[0]
-                    cur.execute("INSERT INTO yt_status (source_id, status) VALUES (%s, 'added') ON CONFLICT DO NOTHING", (sid,))
                 conn.commit()
                 process_video(conn, sid, url)
     except psycopg.Error as e:

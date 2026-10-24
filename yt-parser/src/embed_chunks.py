@@ -177,7 +177,7 @@ def process_embed_queue(conn, args, model) -> None:
     recover_stuck(conn)
 
     while True:
-        ids = claim_by_status(conn, 'loaded', 'process_embed', args.batch_size)
+        ids = claim_by_status(conn, 'loaded', 'process_embed', args.batch_size, actor='cli')
         if not ids:
             if args.watch:
                 time.sleep(args.poll_interval)
@@ -190,13 +190,13 @@ def process_embed_queue(conn, args, model) -> None:
                 embed_one_source(conn, model, sid, args)
                 if source_fully_embedded(conn, sid):
                     update_source_embedding(conn, sid)
-                    set_status(conn, sid, 'embedded')
+                    set_status(conn, sid, 'embedded', actor='cli')
                 else:
                     # какой-то чанк упал — оставляем в 'loaded', чтобы при следующем прогоне доделать
                     set_status(conn, sid, 'loaded', comment='partial chunks embedded')
             except Exception as e:
                 logger.exception(f"[source_id={sid}] embed crashed: {e}")
-                set_status(conn, sid, 'failed_embedded', comment=str(e)[:500])
+                set_status(conn, sid, 'failed_embedded', comment=str(e)[:500], actor='cli')
 
 def source_fully_embedded(conn, sid) -> bool:
     with conn.cursor() as cur:

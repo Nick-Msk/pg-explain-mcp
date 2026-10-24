@@ -112,6 +112,28 @@ SCHEMA_STATEMENTS = [
         comment     TEXT,
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+    """,
+    # Автоматическое создание yt_status при вставке в yt_source
+    """
+    CREATE OR REPLACE FUNCTION auto_create_yt_status()
+    RETURNS TRIGGER AS $$
+    BEGIN
+        INSERT INTO yt_status (source_id, status) VALUES (NEW.id, 'added');
+        RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql;
+    """,
+    """
+    DROP TRIGGER IF EXISTS trg_auto_create_yt_status ON yt_source;
+    CREATE TRIGGER trg_auto_create_yt_status
+    AFTER INSERT ON yt_source
+    FOR EACH ROW EXECUTE FUNCTION auto_create_yt_status();
+    """,
+    # Бэкфилл для старых записей (у которых триггера еще не было)
+    """
+    INSERT INTO yt_status (source_id, status)
+    SELECT id, 'added' FROM yt_source
+    ON CONFLICT (source_id) DO NOTHING;
     """
 ]
 
@@ -128,9 +150,10 @@ def ensure_schema(conn: psycopg.Connection) -> None:
             logger.warning(f"[skip] {label}…: {e}")
     logger.info("Схема БД проверена/создана.")
 
-def claim_by_status(conn: psycopg.Connection, from_status: str, to_status: str, limit: int) -> list[int]:
-    """Атомарно переводит до limit записей из from_status в to_status."""
+def claim_by_status(conn: psycopg.Connection, from_status: str, to_status: str, limit: int, actor: str = 'default') -> list[int]:
     with conn.cursor() as cur:
+        # Устанавливаем actor для триггера
+        cur.execute("SELECT set_config('app.actor', %s, true)", (actor,))
         cur.execute("""
             UPDATE yt_status
             SET status = %s, updated_at = now()
@@ -147,6 +170,15 @@ def claim_by_status(conn: psycopg.Connection, from_status: str, to_status: str, 
     conn.commit()
     return [r[0] for r in rows]
 
+def set_status(conn: psycopg.Connection, source_id: int, status: str, comment: str | None = None, actor: str = 'default') -> None:
+    with conn.cursor() as cur:
+        cur.execute("SELECT set_config('app.actor', %s, true)", (actor,))
+        cur.execute("""
+            UPDATE yt_status
+            SET status = %s, comment = %s, updated_at = now()
+            WHERE source_id = %s
+        """, (status, comment, source_id))
+    conn.commit()
 
 def recover_stuck(conn: psycopg.Connection, timeout_min: int = 30) -> dict[str, int]:
     """Откатывает 'process_*', зависшие дольше timeout_min, в предыдущий статус."""
@@ -170,14 +202,4 @@ def recover_stuck(conn: psycopg.Connection, timeout_min: int = 30) -> dict[str, 
                 result[from_s] = n
     conn.commit()
     return result
-
-
-def set_status(conn: psycopg.Connection, source_id: int, status: str, comment: str | None = None) -> None:
-    with conn.cursor() as cur:
-        cur.execute("""
-            UPDATE yt_status
-            SET status = %s, comment = %s, updated_at = now()
-            WHERE source_id = %s
-        """, (status, comment, source_id))
-    conn.commit()
 
