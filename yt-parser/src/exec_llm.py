@@ -5,12 +5,12 @@
 """
 
 import argparse
-import json
 import logging
 import os
 import sys
 import time
 
+import json_repair
 import psycopg
 from openai import OpenAI
 from psycopg.types.json import Jsonb
@@ -49,62 +49,48 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--lm-model", default="local-model", help="Имя модели (LM Studio игнорирует)")
     return p.parse_args()
 
-
 def analyze_text(client: OpenAI, text: str, model: str) -> tuple[dict | None, str | None]:
-    # Передаем схему, чтобы LM Studio был счастлив и модель не ломала JSON
-    schema = {
-        "type": "object",
-        "properties": {
-            "age": {"type": ["integer", "null"]},
-            "region": {"type": ["string", "null"]},
-            "salary": {"type": ["string", "null"]},
-            "status": {"type": "string", "enum": ["working", "resigned", "fired", "in_thinking", "unknown"]},
-            "reasons": {"type": "array", "items": {"type": "string"}},
-            "raw_text": {"type": "string"}
-        },
-        "required": ["age", "region", "salary", "status", "reasons", "raw_text"],
-        "additionalProperties": False
-    }
-
-    prompt = f"""Проанализируй текст интервью учителя.
-Если данных нет — ставь null. Если статус не ясен — 'unknown'.
+    prompt = f"""Проанализируй текст интервью учителя. Верни СТРОГО валидный JSON.
+Правила заполнения:
+- age: ищи прямые упоминания ("мне 45", "в 30 лет"). Если нет — null. Не гадай!
+- region: область, город или регион. Если нет — null.
+- salary: точная сумма, если упоминается ("30 тысяч", "ставка 18 часов"). Если нет — null.
+- status: ОБЯЗАТЕЛЬНО одно из:
+  * 'resigned' (уволился/уволилась/ушла)
+  * 'working' (работает и не собирается уходить)
+  * 'in_thinking' (работает, но думает уволиться/хочет уйти)
+  * 'fired' (сократили/выгнали)
+  * 'unknown' (вообще не понятно, о чем речь)
+- reasons: список причин увольнения (каждая строка - одна причина).
+- raw_text: краткая выжимка на 2-3 предложения, БЕЗ кавычек внутри, просто текст.
 
 Текст:
-{text[:15000]}"""
+{text[:12000]}"""
 
     try:
         response = client.chat.completions.create(
             model=model,
             messages=[{"role": "user", "content": prompt}],
-            response_format={
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "teacher_extraction",
-                    "strict": True,
-                    "schema": schema
-                }
-            },
             temperature=0.1,
-            max_tokens=4000  # УВЕЛИЧИЛИ, чтобы 27B модель не обрывала текст
+            max_tokens=2000
         )
         content = response.choices[0].message.content.strip()
-
-        # На всякий случай чистим markdown (если strict не сработал)
         if content.startswith("```"):
             content = content.split("\n", 1)[1]
             if content.endswith("```"):
                 content = content[:-3]
         content = content.strip()
-
         if not content:
             return None, "Model returned empty string"
-
-        return json.loads(content), None
+        parsed = json_repair.loads(content)
+        return parsed, None
     except Exception as e:
         return None, str(e)
 
 def save_solution(conn: psycopg.Connection, source_id: int, channel_id: int | None, parsed: dict):
-    raw_json = json.dumps(parsed, ensure_ascii=False)
+    # Вытаскиваем выжимку, которую сгенерировала LLM
+    summary = parsed.get("raw_text") or parsed.get("summary") or ""
+
     with conn.cursor() as cur:
         cur.execute("""
             INSERT INTO yt_solution (channel_id, source_id, raw_text, age, region, salary, status, reasons)
@@ -118,12 +104,11 @@ def save_solution(conn: psycopg.Connection, source_id: int, channel_id: int | No
                 status     = EXCLUDED.status,
                 reasons    = EXCLUDED.reasons
         """, (
-            channel_id, source_id, raw_json,
+            channel_id, source_id, summary,
             parsed.get("age"), parsed.get("region"), parsed.get("salary"),
             parsed.get("status", "unknown"), Jsonb(parsed.get("reasons", []))
         ))
     conn.commit()
-
 
 def process_llm_queue(conn: psycopg.Connection, args: argparse.Namespace) -> None:
     recover_stuck(conn)
