@@ -18,75 +18,14 @@ import yt_dlp
 from psycopg.types.json import Jsonb
 from youtube_transcript_api import YouTubeTranscriptApi
 
+from src.db import connect, ensure_schema, get_db_dsn
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger("yt-parser")
 
-SCHEMA_STATEMENTS = [
-    # --- 1. Расширения (должны идти первыми) ---
-    "CREATE EXTENSION IF NOT EXISTS vector",
-    "CREATE EXTENSION IF NOT EXISTS pg_trgm",
-
-    # --- 2. Базовые таблицы ---
-    """
-    CREATE TABLE IF NOT EXISTS yt_source (
-        id            SERIAL PRIMARY KEY,
-        ytlink        TEXT NOT NULL UNIQUE,
-        metadata      JSONB,
-        contain       TEXT,
-        status        TEXT NOT NULL DEFAULT 'pending'
-                      CHECK (status IN ('pending', 'processing', 'ok', 'failed')),
-        error_message TEXT,
-        created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-        updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
-    );
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS yt_tags (
-        tag         TEXT PRIMARY KEY,
-        description TEXT,
-        weight      NUMERIC NOT NULL DEFAULT 1.0,
-        created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
-    );
-    """,
-
-    # --- 3. Колонки поиска на yt_source ---
-    "ALTER TABLE yt_source ADD COLUMN IF NOT EXISTS embedding vector(1024)",
-    "ALTER TABLE yt_source ADD COLUMN IF NOT EXISTS contain_tsv tsvector "
-    "GENERATED ALWAYS AS (to_tsvector('russian', coalesce(contain, ''))) STORED",
-
-    # --- 4. Индексы на yt_source ---
-    "CREATE INDEX IF NOT EXISTS yt_source_embedding_hnsw_idx "
-    "ON yt_source USING hnsw (embedding vector_cosine_ops)",
-    "CREATE INDEX IF NOT EXISTS yt_source_contain_tsv_idx "
-    "ON yt_source USING gin (contain_tsv)",
-    "CREATE INDEX IF NOT EXISTS yt_source_contain_trgm_idx "
-    "ON yt_source USING gin (contain gin_trgm_ops)",
-
-    # --- 5. Таблица чанков ---
-    """
-    CREATE TABLE IF NOT EXISTS yt_chunks (
-        id          BIGSERIAL PRIMARY KEY,
-        source_id   INT  NOT NULL REFERENCES yt_source(id) ON DELETE CASCADE,
-        chunk_no    INT  NOT NULL,
-        content     TEXT NOT NULL,
-        content_tsv tsvector GENERATED ALWAYS AS (to_tsvector('russian', content)) STORED,
-        embedding   vector(1024),
-        created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-        UNIQUE (source_id, chunk_no)
-    );
-    """,
-
-    # --- 6. Индексы на yt_chunks ---
-    "CREATE INDEX IF NOT EXISTS yt_chunks_tsv_idx "
-    "ON yt_chunks USING gin (content_tsv)",
-    "CREATE INDEX IF NOT EXISTS yt_chunks_embedding_hnsw_idx "
-    "ON yt_chunks USING hnsw (embedding vector_cosine_ops)",
-    "CREATE INDEX IF NOT EXISTS yt_chunks_content_trgm_idx "
-    "ON yt_chunks USING gin (content gin_trgm_ops)",
-]
 
 # --- CLI ---------------------------------------------------------------------
 
@@ -164,30 +103,6 @@ def fetch_transcript(video_id: str, languages: list[str] | None = None) -> str:
 
 # --- Работа с БД -------------------------------------------------------------
 
-def connect(args: argparse.Namespace) -> psycopg.Connection:
-    kwargs = {
-        "host": args.host,
-        "port": args.port,
-        "dbname": args.dbname,
-    }
-    if args.user:
-        kwargs["user"] = args.user
-    if args.password:
-        kwargs["password"] = args.password
-    return psycopg.connect(**kwargs)
-
-def ensure_schema(conn: psycopg.Connection) -> None:
-    for stmt in SCHEMA_STATEMENTS:
-        label = stmt.strip().split("\n", 1)[0][:60]
-        try:
-            with conn.cursor() as cur:
-                cur.execute(stmt)
-            conn.commit()
-        except psycopg.Error as e:
-            conn.rollback()
-            logger.warning(f"[skip] {label}…: {e}")
-    logger.info("Схема проверена.")
-
 def save_to_db(
     conn: psycopg.Connection,
     ytlink: str,
@@ -230,6 +145,20 @@ def process_video(conn: psycopg.Connection, raw_url: str) -> None:
         save_to_db(conn, url, metadata, None, status="failed", error=str(e))
         return
 
+    channel_yt_id = metadata.get("channel_id")
+    channel_name = metadata.get("channel") or "Unknown"
+    channel_db_id = None
+    if channel_yt_id:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO yt_channel (channel_id, name)
+                VALUES (%s, %s)
+                ON CONFLICT (channel_id) DO UPDATE SET name = EXCLUDED.name
+                RETURNING id
+            """, (channel_yt_id, channel_name))
+            channel_db_id = cur.fetchone()[0]
+        conn.commit()
+
     # Теги — отдельно и не фатально
     try:
         tags = extract_tags(metadata)
@@ -247,6 +176,16 @@ def process_video(conn: psycopg.Connection, raw_url: str) -> None:
         return
 
     source_id = save_to_db(conn, url, metadata, transcript, status="ok")
+    # try to map channel
+    # Привязываем видео к каналу
+    if channel_db_id and source_id:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO yt_channel_vids (channel_id, source_id)
+                VALUES (%s, %s) ON CONFLICT DO NOTHING
+            """, (channel_db_id, source_id))
+        conn.commit()
+
     try:
         n = save_chunks(conn, source_id, transcript, max_bytes=4096)
         logger.info(f"Чанков сохранено: {n}.")
@@ -413,8 +352,16 @@ def main() -> int:
     if not args.process and not args.url:
         logger.error("Укажите -y URL или -p (обработать очередь).")
         return 2
+
+    dsn = get_db_dsn(
+        host=args.host,
+        dbname=args.dbname,
+        user=args.user,
+        password=args.password,
+        port=args.port,
+    )
     try:
-        with connect(args) as conn:
+        with connect(dsn) as conn:
             ensure_schema(conn)
             if args.process:
                 process_queue(conn, args)

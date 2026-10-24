@@ -1,0 +1,13 @@
+name: yt-parser
+version: 0.0.1
+schema: v1
+mcpServers:
+  - name: yt-param-extractor
+    # Команда запуска вашего FastMCP сервера через uv
+    command: uv
+    args:
+      - run
+      - src/mcp_server.py
+    env:
+      DB_DSN: "postgresql://localhost:5432/ytparse"
+

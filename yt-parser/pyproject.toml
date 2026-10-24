@@ -5,6 +5,8 @@ description = "YouTube → PostgreSQL pipeline for parsing videos"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.162.0",
+    "fastmcp>=4",
+    "openai>=3.37.0",
     "psycopg[binary]>=3.3.6",
     "ruff>=0.17.2",
     "sentence-transformers>=6.2.0",
