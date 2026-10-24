@@ -50,42 +50,53 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 def analyze_text(client: OpenAI, text: str, model: str) -> tuple[dict | None, str | None]:
-    prompt = f"""Проанализируй текст интервью учителя. Верни СТРОГО валидный JSON.
-Правила заполнения:
-- age: ищи прямые упоминания ("мне 45", "в 30 лет"). Если нет — null. Не гадай!
-- region: область, город или регион. Если нет — null.
-- salary: точная сумма, если упоминается ("30 тысяч", "ставка 18 часов"). Если нет — null.
-- status: ОБЯЗАТЕЛЬНО одно из:
-  * 'resigned' (уволился/уволилась/ушла)
-  * 'working' (работает и не собирается уходить)
-  * 'in_thinking' (работает, но думает уволиться/хочет уйти)
-  * 'fired' (сократили/выгнали)
-  * 'unknown' (вообще не понятно, о чем речь)
-- reasons: список причин увольнения (каждая строка - одна причина).
-- raw_text: краткая выжимка на 2-3 предложения, БЕЗ кавычек внутри, просто текст.
+    prompt = f"""Ты — аналитик. Проанализируй текст интервью учителя.
+Верни СТРОГО валидный JSON без markdown-оберток.
+Поля:
+- age (int|null)
+- region (str|null)
+- salary (str|null)
+- status (str) - одно из: 'working', 'resigned', 'fired', 'in_thinking', 'unknown'
+- reasons (list[str])
+- raw_text (str) - краткая выжимка (2-3 предложения, без кавычек внутри)
 
 Текст:
 {text[:12000]}"""
 
-    try:
-        response = client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.1,
-            max_tokens=2000
-        )
-        content = response.choices[0].message.content.strip()
-        if content.startswith("```"):
-            content = content.split("\n", 1)[1]
-            if content.endswith("```"):
-                content = content[:-3]
-        content = content.strip()
-        if not content:
-            return None, "Model returned empty string"
-        parsed = json_repair.loads(content)
-        return parsed, None
-    except Exception as e:
-        return None, str(e)
+    max_retries = 3
+    last_error = "Unknown error"
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+                max_tokens=2000
+            )
+            content = response.choices[0].message.content
+
+            if not content or not content.strip():
+                last_error = "Model returned empty string"
+                logger.warning(f"Попытка {attempt}/{max_retries}: пустой ответ, повторяем...")
+                continue  # Пробуем еще раз
+
+            content = content.strip()
+            if content.startswith("```"):
+                content = content.split("\n", 1)[1]
+                if content.endswith("```"):
+                    content = content[:-3]
+            content = content.strip()
+
+            parsed = json_repair.loads(content)
+            return parsed, None  # Успех!
+
+        except Exception as e:
+            last_error = str(e)
+            logger.warning(f"Попытка {attempt}/{max_retries}: ошибка {e}")
+
+    # Если все 3 попытки провалились
+    return None, f"Failed after {max_retries} attempts. Last error: {last_error}"
 
 def save_solution(conn: psycopg.Connection, source_id: int, channel_id: int | None, parsed: dict):
     # Вытаскиваем выжимку, которую сгенерировала LLM
