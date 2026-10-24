@@ -152,6 +152,7 @@ def process_llm_queue(conn: psycopg.Connection, args: argparse.Namespace) -> Non
                 logger.info(f"[source_id={sid}] solution saved (status={parsed.get('status')})")
             except Exception as e:
                 logger.exception(f"[source_id={sid}] crashed: {e}")
+                conn.rollback()
                 set_status(conn, sid, 'failed_solution', comment=str(e)[:500])
 
 def main() -> int:

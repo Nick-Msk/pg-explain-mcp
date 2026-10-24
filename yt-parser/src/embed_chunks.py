@@ -13,7 +13,7 @@ import logging
 import os
 import sys
 import time
-
+import transformers
 import psycopg
 from sentence_transformers import SentenceTransformer
 
@@ -26,11 +26,23 @@ from src.db import (
     set_status,
 )
 
+transformers.utils.logging.disable_progress_bar()
+transformers.utils.logging.set_verbosity_error()
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger("embed_chunks")
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+)
+# Отключаем спам от HTTP-запросов Hugging Face
+logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("sentence_transformers").setLevel(logging.WARNING)
 
 DEFAULT_MODEL = "intfloat/multilingual-e5-large"
 EXPECTED_DIM = 1024
@@ -64,24 +76,32 @@ def parse_args() -> argparse.Namespace:
                    help="Пересчитать даже те чанки, у которых embedding уже есть")
     p.add_argument("--skip-source", action="store_true",
                    help="Не обновлять yt_source.embedding (только чанки)")
+
+    p.add_argument("-p", "--process", action="store_true", help="Обработать очередь (loaded -> embedded)")
+    p.add_argument("--watch", action="store_true", help="Ждать новые loaded")
+    p.add_argument("--poll-interval", type=int, default=10)
+
+    p.add_argument("--update-model", action="store_true", help="Проверить обновления модели на HuggingFace")
+
     return p.parse_args()
 
 
 # --- Подключение и модель ----------------------------------------------------
 
-def build_model(name: str, device: str | None) -> SentenceTransformer:
-    logger.info(f"Загрузка модели: {name} (device={device or 'auto'})")
-    model = SentenceTransformer(name, device=device)
+def build_model(name: str, device: str | None, update: bool = False) -> SentenceTransformer:
+    # Если update=False, заставляем использовать локальный кэш (никаких запросов в сеть)
+    local_only = not update
+
+    logger.info(f"Загрузка модели: {name} (device={device or 'auto'}, local_only={local_only})")
+
+    model = SentenceTransformer(name, device=device, local_files_only=local_only)
+
     dim = model.get_embedding_dimension()
     if dim != EXPECTED_DIM:
         raise RuntimeError(
-            f"Модель '{name}' даёт размерность {dim}, а схема ждёт {EXPECTED_DIM}. "
-            f"Либо возьмите модель с {EXPECTED_DIM} измерениями, либо сделайте "
-            f"ALTER TABLE ... TYPE vector({dim})."
+            f"Модель '{name}' даёт размерность {dim}, а схема ждёт {EXPECTED_DIM}."
         )
-    logger.info(f"Модель загружена, размерность = {dim}.")
     return model
-
 
 def passage_prefix(model_name: str) -> str:
     """e5 требует префикс 'passage: ' для документов, bge — без префикса."""
@@ -196,6 +216,7 @@ def process_embed_queue(conn, args, model) -> None:
                     set_status(conn, sid, 'loaded', comment='partial chunks embedded')
             except Exception as e:
                 logger.exception(f"[source_id={sid}] embed crashed: {e}")
+                conn.rollback()
                 set_status(conn, sid, 'failed_embedded', comment=str(e)[:500], actor='cli')
 
 def source_fully_embedded(conn, sid) -> bool:
@@ -307,7 +328,7 @@ def main() -> int:
     args = parse_args()
 
     try:
-        model = build_model(args.model, args.device)
+        model = build_model(args.model, args.device, update=args.update_model)
     except Exception as e:
         logger.error(f"Не удалось загрузить модель: {e}")
         return 1

@@ -69,7 +69,14 @@ def extract_video_id(url: str) -> str:
     raise ValueError(f"Не удалось извлечь video ID из URL: {url}")
 
 def fetch_metadata(url: str) -> dict:
-    ydl_opts = {"skip_download": True, "quiet": True, "no_warnings": True}
+    ydl_opts = {
+        "skip_download": True,
+        "quiet": True,
+        "no_warnings": True,
+        "ignore_no_formats_error": True,
+        # Добавляем эту строку:
+        "cookiesfrombrowser": ("firefox",)  # или "chrome", "safari", "edge"
+    }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=False)
         return ydl.sanitize_info(info)
@@ -225,7 +232,9 @@ def process_queue(conn: psycopg.Connection, args: argparse.Namespace) -> None:
                 process_video(conn, sid, url)
             except Exception as e:
                 logger.exception(f"[source_id={sid}] crashed: {e}")
+                conn.rollback()
                 set_status(conn, sid, 'failed_load', comment=str(e)[:500], actor='cli')
+
 
 def main() -> int:
     args = parse_args()
